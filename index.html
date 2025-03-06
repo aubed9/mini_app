@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>انتخاب فونت و رنگ</title>
+    <script src="https://web.bale.ai/miniapp/sdk.js"></script>
+    <style>
+        body {
+            padding: 20px;
+            text-align: center;
+            font-family: Tahoma;
+        }
+        .form-group {
+            margin: 20px 0;
+        }
+        label {
+            display: block;
+            margin-bottom: 10px;
+        }
+        #result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <h1>انتخاب فونت و رنگ</h1>
+    
+    <div class="form-group">
+        <label for="fontSelect">نوع فونت را انتخاب کنید:</label>
+        <select id="fontSelect">
+            <option value="Tahoma">Tahoma</option>
+            <option value="Arial">Arial</option>
+            <option value="Vazir">Vazir</option>
+            <option value="Samim">Samim</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="colorPicker">رنگ مورد نظر را انتخاب کنید:</label>
+        <input type="color" id="colorPicker" value="#ff0000">
+    </div>
+
+    <button onclick="sendToBot()" style="margin-top: 20px; padding: 10px 20px;">
+        ارسال تنظیمات به بات
+    </button>
+
+
+    <div id="result">
+        <p id="sampleText">این یک نمونه متن با تنظیمات شماست</p>
+        <p id="currentSettings"></p>
+    </div>
+
+    <script>
+        function applySettings() {
+            const font = document.getElementById('fontSelect').value;
+            const color = document.getElementById('colorPicker').value;
+            
+            const sampleText = document.getElementById('sampleText');
+            sampleText.style.fontFamily = font;
+            sampleText.style.color = color;
+
+            document.getElementById('currentSettings').innerHTML = 
+                `فونت فعلی: ${font} | رنگ فعلی: ${color}`;
+            
+        }
+
+        async function sendToBot() {
+            const font = document.getElementById('fontSelect').value;
+            const color = document.getElementById('colorPicker').value;
+            
+            try {
+                // Connect to Gradio client
+                const client = await window.Gradio.Client.connect("https://rayesh-auto-content.liara.run/");
+                
+                // Make prediction with parameters
+                const result = await client.predict("/main", {
+                    url: f`https://tapi.bale.ai/file/bot1261816176:T4jSrvlJiCfdV5UzUkpywN2HFrzef1IZJs5URAkz/${file_path}`,
+                    clip_type: "dub",
+                    parameters: `${font},${color}`
+                });
+
+                // Show success message with response data
+                alert(`تنظیمات با موفقیت ارسال شد!\nنتیجه سرور: ${JSON.stringify(result.data)}`);
+                
+                // Send confirmation to Bale bot
+                MiniApp.sendData(`Settings applied: ${font}, ${color}`);
+                
+            } catch (error) {
+                console.error('خطا در ارسال:', error);
+                alert(`خطا در ارسال: ${error.message}`);
+            }
+        }
+
+
+        // Initialize Mini App (optional but recommended)
+        MiniApp.ready().then(() => {
+            MiniApp.initialize()
+                .catch(error => {
+                    console.error('خطا در راه‌اندازی:', error);
+                });
+        });
+    </script>
+</body>
+</html>
