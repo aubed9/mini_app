@@ -4,180 +4,173 @@
     <script type="module">
         import { Client } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
         const client = await Client.connect("https://rayesh-auto-content.liara.run/");
+        <script src="https://web.bale.ai/miniapp/sdk.js"></script>
     </script>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Processing App</title>
-    <style>
-        :root {
-            --primary-color: #2d8cf0;
-            --secondary-color: #19be6b;
-            --background-color: #f8f9fa;
-            --text-color: #333333;
-            --border-radius: 8px;
-            --padding: 12px;
-        }
-
-        body {
-            font-family: Arial, sans-serif;
-            background-color: var(--background-color);
-            color: var(--text-color);
-            padding: 20px;
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .container {
-            background-color: white;
-            padding: var(--padding);
-            border-radius: var(--border-radius);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .form-group {
-            margin-bottom: 15px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-
-        input[type="radio"] {
-            margin-right: 10px;
-        }
-
-        select, input[type="file"] {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            margin-top: 5px;
-        }
-
-        button {
-            background-color: var(--primary-color);
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: var(--border-radius);
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        button:hover {
-            background-color: #1e6fd9;
-        }
-
-        #sub-params {
-            margin-top: 15px;
-            padding: 15px;
-            background-color: #f5f5f5;
-            border-radius: 4px;
-            display: none;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Video Processing Submission</title>
+  <!-- 
+    For theme styling based on Bale miniapp docs,
+    see: https://docs.bale.ai/miniapp#themeparams
+    In this example we use simple CSS classes named "bale-input", "bale-select", and "bale-button"
+    that you can replace or extend with the appropriate theme parameters.
+  -->
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 0 16px;
+    }
+    h1 {
+      text-align: center;
+    }
+    label {
+      display: block;
+      margin-top: 16px;
+      font-weight: bold;
+    }
+    .bale-input,
+    .bale-select {
+      width: 100%;
+      padding: 8px;
+      margin-top: 8px;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 16px;
+    }
+    .bale-button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      font-size: 16px;
+      margin-top: 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .bale-button:hover {
+      background-color: #0056b3;
+    }
+    /* Initially hide sub parameters */
+    #subParams {
+      display: none;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Video Processing</h1>
-        <div class="form-group">
-            <label>Processing Type:</label>
-            <div>
-                <label>
-                    <input type="radio" name="processType" value="dub" checked onchange="toggleSubParams()">
-                    Dub
-                </label>
-                <label>
-                    <input type="radio" name="processType" value="sub" onchange="toggleSubParams()">
-                    Sub
-                </label>
-            </div>
-        </div>
+  <h1>Video Processing Submission</h1>
+  <form id="videoForm">
+    <label for="clipType">Select Process Type:</label>
+    <select id="clipType" name="clipType" class="bale-select">
+      <option value="dub">Dub</option>
+      <option value="sub">Sub</option>
+    </select>
 
-        <div id="sub-params">
-            <div class="form-group">
-                <label for="font-type">Font Type:</label>
-                <select id="font-type">
-                    <option value="arial">Arial</option>
-                    <option value="nazanin">Nazanin</option>
-                    <option value="yekta">Yekta</option>
-                </select>
-            </div>
+    <!-- Extra parameters appear only when "sub" is chosen -->
+    <div id="subParams">
+      <label for="fontType">Font Type:</label>
+      <select id="fontType" name="fontType" class="bale-select">
+        <option value="arial">Arial</option>
+        <option value="nazanin">Nazanin</option>
+        <option value="yekta">Yekta</option>
+      </select>
 
-            <div class="form-group">
-                <label for="color">Color:</label>
-                <select id="color">
-                    <option value="black">Black</option>
-                    <option value="white">White</option>
-                    <option value="yellow">Yellow</option>
-                </select>
-            </div>
-        </div>
-
-        
-        <div class="form-group">
-            <label for="video-input">Select Video File:</label>
-            <input type="file" id="video-input" accept="video/*">
-        </div>
-
-        <button onclick="processVideo()">Process Video</button>
+      <label for="color">Color:</label>
+      <select id="color" name="color" class="bale-select">
+        <option value="black">Black</option>
+        <option value="white">White</option>
+        <option value="yellow">Yellow</option>
+      </select>
     </div>
 
-    <script>
-        function toggleSubParams() {
-            const subParams = document.getElementById('sub-params');
-            const processType = document.querySelector('input[name="processType"]:checked').value;
-            subParams.style.display = processType === 'sub' ? 'block' : 'none';
-        }
+    <label for="videoFile">Select Video File:</label>
+    <input type="file" id="videoFile" name="videoFile" class="bale-input" accept="video/*" required>
 
-        async function processVideo() {
-            const processType = document.querySelector('input[name="processType"]:checked').value;
-            const videoFile = document.getElementById('video-input').files[0];
-            
-            if (!videoFile) {
-                alert('Please select a video file');
-                return;
-            }
+    <button type="submit" class="bale-button">Submit</button>
+  </form>
 
-            let parameters = '';
-            if (processType === 'sub') {
-                const fontType = document.getElementById('font-type').value;
-                const color = document.getElementById('color').value;
-                parameters = JSON.stringify({
-                    font: fontType,
-                    color: color
-                });
-            }
+  <!-- Using a module script so we can import the Gradio client from a CDN (e.g. Skypack) -->
+  <script type="module">
+    // Import the Gradio client from a CDN.
+    import { Client } from "https://cdn.skypack.dev/@gradio/client";
 
-            // Create FormData to send the file
-            const formData = new FormData();
-            formData.append('url', videoFile);
-            formData.append('clip_type', processType);
-            formData.append('parameters', parameters);
+    // Connect to your Gradio web app
+    const client = await Client.connect("https://rayesh-auto-content.liara.run/");
 
-            try {
-                const result = await client.predict("/main", { 		
-                		url: videoFile, 		
-                		clip_type: processType, 		
-                		parameters: parameters, 
-                });
-               // const response = await fetch('https://rayesh-auto-content.liara.run/main', {
-                 //   method: 'POST',
-                   // body: formData
-                //});
+    const form = document.getElementById("videoForm");
+    const clipTypeSelect = document.getElementById("clipType");
+    const subParamsDiv = document.getElementById("subParams");
 
-                if (!response.ok) throw new Error('Network response was not ok');
-                
-                const result = await response.json();
-                console.log('Processing result:', result);
-                alert('Video processed successfully! Check console for details.');
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Error processing video: ' + error.message);
-            }
-        }
-    </script>
+    // Show/hide additional parameters if "sub" is selected.
+    clipTypeSelect.addEventListener("change", () => {
+      if (clipTypeSelect.value === "sub") {
+        subParamsDiv.style.display = "block";
+      } else {
+        subParamsDiv.style.display = "none";
+      }
+    });
+
+    // Helper function: converts the selected file into a base64 data URL.
+    function fileToDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Error reading file"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      // Get the selected process type
+      const clipType = clipTypeSelect.value;
+      
+      // If "sub", capture additional parameters; otherwise, leave parameters empty.
+      let parameters = "";
+      if (clipType === "sub") {
+        const fontType = document.getElementById("fontType").value;
+        const color = document.getElementById("color").value;
+        // Create an object (or string) representing additional parameters.
+        parameters = JSON.stringify({ font_type: fontType, color: color });
+      }
+
+      // Get the selected video file. (Ensure a file is selected.)
+      const videoInput = document.getElementById("videoFile");
+      if (videoInput.files.length === 0) {
+        alert("Please select a video file.");
+        return;
+      }
+      const file = videoInput.files[0];
+
+      // Convert the video file to a data URL.
+      let videoUrl;
+      try {
+        videoUrl = await fileToDataURL(file);
+      } catch (error) {
+        alert("Error processing the video file.");
+        return;
+      }
+
+      // Prepare payload for the Gradio endpoint.
+      const payload = {
+        url: videoUrl,         // The video file (as a data URL)
+        clip_type: clipType,   // "dub" or "sub"
+        parameters: parameters // Additional parameters if needed
+      };
+
+      try {
+        // Call the Gradio API endpoint "/main". The returned object is logged.
+        const result = await client.predict("/main", payload);
+        console.log("Prediction result:", result.data);
+        alert("Video submitted successfully. Check the console for results.");
+      } catch (error) {
+        console.error("Error sending data to Gradio:", error);
+        alert("An error occurred while submitting your video.");
+      }
+    });
+  </script>
 </body>
 </html>
