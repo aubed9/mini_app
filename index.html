@@ -27,6 +27,17 @@
     </style>
 </head>
 <body>
+    <h1>انتخاب خدمات</h1>
+
+    <div class="form-group">
+        <label for="typeSelect">نوع فونت را انتخاب کنید:</label>
+        <select id="typeSelect">
+            <option value="dub">دوبله</option>
+            <option value="sub">زیرنویس</option>
+        </select>
+    </div>
+
+
     <h1>انتخاب فونت و رنگ</h1>
     
     <div class="form-group">
@@ -56,9 +67,9 @@
 
     <script>
         function applySettings() {
+            const type = document.getElementById('typeSelect').value;
             const font = document.getElementById('fontSelect').value;
             const color = document.getElementById('colorPicker').value;
-            
             const sampleText = document.getElementById('sampleText');
             sampleText.style.fontFamily = font;
             sampleText.style.color = color;
@@ -69,6 +80,7 @@
         }
 
         async function sendToBot() {
+            const type = document.getElementById('typeSelect').value;
             const font = document.getElementById('fontSelect').value;
             const color = document.getElementById('colorPicker').value;
             
@@ -79,15 +91,13 @@
                 // Make prediction with parameters
                 const result = await client.predict("/main", {
                     url: f`https://tapi.bale.ai/file/bot1261816176:T4jSrvlJiCfdV5UzUkpywN2HFrzef1IZJs5URAkz/${file_path}`,
-                    clip_type: "dub",
+                    clip_type: `${type}`,
                     parameters: `${font},${color}`
                 });
 
                 // Show success message with response data
                 alert(`تنظیمات با موفقیت ارسال شد!\nنتیجه سرور: ${JSON.stringify(result.data)}`);
                 
-                // Send confirmation to Bale bot
-                MiniApp.sendData(`Settings applied: ${font}, ${color}`);
                 
             } catch (error) {
                 console.error('خطا در ارسال:', error);
