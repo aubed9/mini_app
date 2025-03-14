@@ -45,7 +45,7 @@ def load_user(user_id):
     return None
 
 # Bot token (replace with your actual bot token)
-BOT_TOKEN = "YOUR_BOT_TOKEN"  # Store securely in production
+BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"  # Store securely in production
 
 # Validate initData
 def validate_init_data(init_data):
