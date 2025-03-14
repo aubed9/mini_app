@@ -35,7 +35,7 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect('/data-base/users.db')
     c = conn.cursor()
     c.execute("SELECT id, bale_user_id, username FROM users WHERE id = ?", (user_id,))
     user_data = c.fetchone()
