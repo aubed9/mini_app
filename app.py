@@ -17,7 +17,7 @@ login_manager.login_view = "login"
 
 # SQLite database setup
 def init_db():
-    conn = sqlite3.connect('/data-base/users.db')
+    conn = sqlite3.connect('data-base/users.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -35,7 +35,7 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = sqlite3.connect('/data-base/users.db')
+    conn = sqlite3.connect('data-base/users.db')
     c = conn.cursor()
     c.execute("SELECT id, bale_user_id, username FROM users WHERE id = ?", (user_id,))
     user_data = c.fetchone()
