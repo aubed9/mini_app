@@ -51,7 +51,7 @@ BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"  # Store secure
 def validate_init_data(init_data):
     print(f"init_data type{type(init_data)}")
     print(f"init_data: {init_data}")
-    parsed_data = parse_qs("640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12")
+    parsed_data = parse_qs("auth_date=1741927541&hash=bf471fa6492b7360214fc40f40b545369db3e1e9a1fa95638594e098817d8994&query_id=YYTUYQYmipTEGbIfkR4IGaaM&user=%7B%22allows_write_to_pm%22%3Atrue%2C%22first_name%22%3A%22%D9%85%D8%AD%D9%85%D8%AF%D8%B9%D8%A7%D8%A8%D8%AF+%D8%A7%D8%B5%D9%81%D9%87%D8%A7%D9%86%DB%8C+%D8%B2%D8%A7%D8%AF%D9%87%22%2C%22id%22%3A31315407%2C%22username%22%3A%22aubed%22%7D")
     print(f"pars:{parsed_data}")
     print(f"parsed_data type: {parsed_data}")
     data_dict = {k: v[0] for k, v in parsed_data.items()}
