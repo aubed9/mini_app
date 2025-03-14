@@ -50,9 +50,10 @@ BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"  # Store secure
 # Validate initData
 def validate_init_data(init_data):
     parsed_data = parse_qs(init_data)
-    print(f"pars:{init_data}")
+    print(f"pars:{parsed_data}")
+    print(f"parsed_data type: {parsed_data}")
     data_dict = {k: v[0] for k, v in parsed_data.items()}
-    prtin(f"dict: {data_dict}")
+    print(f"dict: {data_dict}")
     hash_value = data_dict.pop('hash', None)
     print(f"hash: {hash_value}")
     if not hash_value:
