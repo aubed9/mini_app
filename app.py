@@ -54,7 +54,7 @@ def validate_init_data(init_data):
     data_dict = {k: v[0] for k, v in parsed_data.items()}
     prtin(f"dict: {data_dict}")
     hash_value = data_dict.pop('hash', None)
-    prtin(f"hash: {hash_value}")
+    print(f"hash: {hash_value}")
     if not hash_value:
         return False, "Missing hash in initData"
     
