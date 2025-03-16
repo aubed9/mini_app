@@ -322,7 +322,7 @@ def index():
     </head>
     <body>
         <h1>بررسی صحت کاربر</h1>
-        <p id="status">Checking authentication...</p>
+        <p id="status">... در حال بررسی</p>
         <script>
             window.onload = function() {
                 if (typeof Bale !== 'undefined' && Bale.WebApp) {
@@ -435,7 +435,7 @@ def dashboard():
                     <div class="parameters">
                         <h2>:پارامتر ها</h2>
                         <div class="param-group">
-                            <label>Font Type:
+                            <label>:نوع فونت
                                 <select name="font_type" required>
                                     <option value="arial">آریال</option>
                                     <option value="yekan">یکان</option>
@@ -443,11 +443,11 @@ def dashboard():
                                 </select>
                             </label>
                             
-                            <label>Font Size:
+                            <label>:اندازه فونت
                                 <input type="number" name="font_size" min="8" max="72" value="12" required>
                             </label>
                             
-                            <label>Font Color:
+                            <label>: رنگ فونت
                                 <select name="font_color" required>
                                     <option value="#yellow">زرد</option>
                                     <option value="#black">مشکی</option>
@@ -458,21 +458,25 @@ def dashboard():
 
                         <div class="param-group">
                             
-                            <label>Target Audience:
-                                <input type="text" name="target" placeholder="Enter target audience" >
+                            <label> جامعه مخاطبین هدف شما چه کسانی هستند؟
+                                <input type="text" name="target" placeholder="دانش آموزانی که به دنبال یادگیری ریاضی هستند" >
                             </label>
                             
-                            <label>Style:
-                                <input type="text" name="style" placeholder="Enter video style" >
+                            <label>لحن و شیوه سخن ترجمه چگونه باشد؟
+                                <input type="text" name="style" placeholder="...خبری،‌ ساده و روان، پرهیجان" >
                             </label>
                             
-                            <label>Subject:
-                                <input type="text" name="subject" placeholder="Enter main subject" >
+                            <label>موضوع اصلی ویدئوت چیه؟
+                                <input type="text" name="subject" placeholder="...آموزش ریاضی دانشگاه، تحلیل و بررسی گوشی جدید سامسونگ" >
+                            </label>
+                            
+                            <label>هر نکته دیگه که بنظرت ترجمه رو بهتر می کنه رو اینجا بنویس
+                                <input type="text" name="subject" placeholder="لغات فنی و خاص تکتنولوژی رو ترجمه نکن" >
                             </label>
                         </div>
                     </div>
 
-                    <input type="submit" value="Process Video">
+                    <input type="submit" value="تایید پارامترها و ارسال؟">
                 </form>
             </body>
             </html>
