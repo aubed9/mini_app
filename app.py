@@ -10,6 +10,10 @@ from collections import defaultdict
 import threading
 import time
 import uuid
+
+# Initialize tasks storage and lock
+tasks = defaultdict(dict)
+task_lock = threading.Lock()
 executor = ThreadPoolExecutor(max_workers=4)
 # Initialize Flask app
 app = Flask(__name__)
