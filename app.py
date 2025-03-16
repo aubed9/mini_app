@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, redirect, url_for
+from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import mysql.connector
 import hmac
@@ -10,16 +10,18 @@ from collections import defaultdict
 import threading
 import time
 import uuid
+from datetime import timedelta
 
 # Initialize tasks storage and lock
 tasks = defaultdict(dict)
 task_lock = threading.Lock()
 executor = ThreadPoolExecutor(max_workers=4)
+
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = 'A1u3b8e0d@#'  # Replace with a secure key in production
-#app.config['SESSION_COOKIE_SECURE'] = True  # If using HTTPS
-#app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Adjust based on your cross-site requirements
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+
 # Set up Flask-Login
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -39,9 +41,9 @@ def init_db():
             print('Connected to MySQL.')
             cursor = conn.cursor()
             cursor.execute('''CREATE TABLE IF NOT EXISTS users 
-                             (id INT PRIMARY KEY AUTO_INCREMENT, 
-                              bale_user_id INT UNIQUE, 
-                              username TEXT)''')
+                            (id INT PRIMARY KEY AUTO_INCREMENT, 
+                             bale_user_id INT UNIQUE, 
+                             username TEXT)''')
             conn.commit()
             conn.close()
     except Exception as e:
@@ -77,6 +79,24 @@ def load_user(user_id):
 
 # Bot token
 BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"
+
+# Database configuration (FIXED PASSWORD)
+db_config = {
+    'host': 'annapurna.liara.cloud',
+    'port': 32002,
+    'user': 'root',
+    'password': '4zjqmEfeRhCqYYDhvkaODXD3',
+    'database': 'users',
+    'auth_plugin': 'mysql_native_password'
+}
+
+def get_db_connection():
+    try:
+        conn = mysql.connector.connect(**db_config)
+        return conn
+    except mysql.connector.Error as err:
+        app.logger.error(f"Database connection error: {err}")
+        return None
 
 # Custom URL decoding functions
 def url_decode(s):
@@ -134,33 +154,12 @@ def validate_init_data(init_data):
         return False, "Invalid hash, data may be tampered"
     return True, data_dict
 
-from datetime import datetime
-
-# Database configuration
-# Correct database configuration
-db_config = {
-    'host': 'annapurna.liara.cloud',
-    'port': 32002,
-    'user': 'root',
-    'password': '4zjqmEfeRhCqYYDhvkaODXD3',  # Use correct password
-    'database': 'users',
-    'auth_plugin': 'mysql_native_password'
-}
-
-def get_db_connection():
-    try:
-        conn = mysql.connector.connect(**db_config)
-        return conn
-    except mysql.connector.Error as err:
-        app.logger.error(f"Database connection error: {err}")
-        return None
-
 @app.route('/save_video', methods=['POST'])
+@login_required
 def save_video():
     conn = None
     cursor = None
     try:
-        # Validate request data
         data = request.get_json()
         if not data:
             return jsonify({'status': 'error', 'message': 'No data provided'}), 400
@@ -170,14 +169,12 @@ def save_video():
             if field not in data:
                 return jsonify({'status': 'error', 'message': f'Missing field: {field}'}), 400
 
-        # Get database connection
         conn = get_db_connection()
         if not conn:
             return jsonify({'status': 'error', 'message': 'Database connection failed'}), 500
 
         cursor = conn.cursor()
 
-        # Create videos table if not exists
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS videos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -189,7 +186,6 @@ def save_video():
             )
         ''')
 
-        # Insert video data
         insert_query = '''
             INSERT INTO videos 
             (bale_user_id, username, video_url, parameters)
@@ -244,42 +240,32 @@ def register():
     except (json.JSONDecodeError, KeyError):
         return jsonify({'error': 'Invalid user data'}), 400
     
+    conn = get_db_connection()
+    cursor = conn.cursor()
     try:
-        conn = mysql.connector.connect(
-            host='annapurna.liara.cloud',
-            user='root',
-            port=32002,
-            password='4zjqmEfeRhCqYYDhvkaODXD3',
-            database='users',
-        )
-        c = conn.cursor()
-        
-        # Check if user already exists
-        c.execute("SELECT id FROM users WHERE bale_user_id = %s", (bale_user_id,))
-        if c.fetchone():
-            conn.close()
+        cursor.execute("SELECT id FROM users WHERE bale_user_id = %s", (bale_user_id,))
+        if cursor.fetchone():
             return jsonify({'error': 'User already exists'}), 400
         
-        # Insert new user
-        c.execute("INSERT INTO users (bale_user_id, username) VALUES (%s, %s)", 
-                  (bale_user_id, username))
+        cursor.execute("INSERT INTO users (bale_user_id, username) VALUES (%s, %s)", 
+                     (bale_user_id, username))
         conn.commit()
-        conn.close()
         return jsonify({'message': 'User registered successfully'}), 201
-        
-    except mysql.connector.Error as err:
-        return jsonify({'error': str(err)}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
-    
 @app.route('/login', methods=['POST'])
 def login():
     init_data = request.get_json().get('initData')
     if not init_data:
         return jsonify({'error': 'Missing initData'}), 400
+    
     is_valid, result = validate_init_data(init_data)
     if not is_valid:
         return jsonify({'error': result}), 400
     data_dict = result
+    
     user_json = data_dict.get('user')
     if not user_json:
         return jsonify({'error': 'Missing user data'}), 400
@@ -288,26 +274,24 @@ def login():
         bale_user_id = user_data['id']
     except (json.JSONDecodeError, KeyError):
         return jsonify({'error': 'Invalid user data'}), 400
+    
     try:
-        conn = mysql.connector.connect(
-            host='annapurna.liara.cloud',
-            user='root',
-            password='4zjqmEfeRhCqYYDhvkaODXD3',
-            database='users',
-            port=32002,
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT id, bale_user_id, username FROM users WHERE bale_user_id = %s", (bale_user_id,))
         user_data = cursor.fetchone()
-        conn.close()
         if user_data:
             user = User(user_data[0], user_data[1], user_data[2])
-            login_user(user)
+            login_user(user, remember=True)
+            session.permanent = True
             return jsonify({'message': 'Logged in successfully'}), 200
         return jsonify({'error': 'User not found'}), 404
     except Exception as e:
-        print(f"Error in login: {e}")
+        app.logger.error(f"Login error: {e}")
         return jsonify({'error': 'Database error'}), 500
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.route('/logout')
 @login_required
@@ -345,7 +329,7 @@ def index():
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ initData: initData }),
-                            credentials: 'include'  // Add this line
+                            credentials: 'include'
                         })
                         .then(response => {
                             if (response.ok) {
@@ -355,7 +339,7 @@ def index():
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ initData: initData }),
-                                    credentials: 'include'  // Add this line for register too
+                                    credentials: 'include'
                                 }).then(registerResponse => {
                                     if (registerResponse.ok) {
                                         window.location.href = '/dashboard';
@@ -390,24 +374,22 @@ def index():
 @login_required
 def dashboard():
     try:
-        conn = mysql.connector.connect(
-            host='annapurna.liara.cloud',
-            user='root',
-            port=32002,
-            password='4zjqmEfeRhCqYYDhvkaODXD3',
-            database='users',
-        )
+        conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         
+        # FIXED QUERY WITH CORRECT COLUMN NAMES
         cursor.execute('''
-            SELECT video_name, url, creation_time 
+            SELECT video_url as url, created_at 
             FROM videos 
-            WHERE user_id = %s 
-            AND creation_time >= NOW() - INTERVAL 24 HOUR
-            ORDER BY creation_time DESC
-        ''', (current_user.id,))
+            WHERE bale_user_id = %s 
+            AND created_at >= NOW() - INTERVAL 24 HOUR
+            ORDER BY created_at DESC
+        ''', (current_user.bale_user_id,))
         videos = cursor.fetchall()
-        conn.close()
+        
+        # Add video_name from URL (example implementation)
+        for video in videos:
+            video['video_name'] = video['url'].split('/')[-1][:20]
 
         return render_template_string('''
             <!DOCTYPE html>
@@ -437,7 +419,7 @@ def dashboard():
                                     <input type="radio" name="video_url" value="{{ video.url }}" required>
                                     <strong>{{ video.video_name }}</strong><br>
                                     <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
-                                    <span class="timestamp">Uploaded at: {{ video.creation_time }}</span>
+                                    <span class="timestamp">Uploaded at: {{ video.created_at }}</span>
                                 </div>
                             {% endfor %}
                         {% else %}
@@ -495,15 +477,17 @@ def dashboard():
         ''', username=current_user.username, videos=videos)
 
     except Exception as e:
-        print(f"Dashboard error: {e}")
+        app.logger.error(f"Dashboard error: {e}")
         return "Error loading dashboard", 500
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.route('/process_video', methods=['POST'])
 @login_required
 def process_video():
     task_id = str(uuid.uuid4())
     
-    # Initialize task with lock
     with task_lock:
         tasks[task_id] = {
             'status': 'initializing',
@@ -513,7 +497,6 @@ def process_video():
             'created_at': time.time()
         }
 
-    # Submit task to thread pool
     executor.submit(
         process_video_task,
         task_id,
@@ -564,8 +547,16 @@ def process_video():
                 
                 function checkProgress() {
                     fetch(`/progress/${task_id}`)
-                        .then(response => response.json())
+                        .then(response => {
+                            if (!response.ok) throw new Error('Network error');
+                            return response.json();
+                        })
                         .then(data => {
+                            if (data.status === 'error') {
+                                showError(data.message);
+                                return;
+                            }
+                            
                             document.getElementById('progress').style.width = `${data.progress}%`;
                             document.getElementById('status').textContent = data.message;
                             
@@ -578,7 +569,15 @@ def process_video():
                             } else if (data.status !== 'failed') {
                                 setTimeout(checkProgress, 1000);
                             }
+                        })
+                        .catch(error => {
+                            showError(error.message);
                         });
+                }
+                
+                function showError(message) {
+                    document.getElementById('status').textContent = `Error: ${message}`;
+                    document.getElementById('progress').style.backgroundColor = '#ff0000';
                 }
                 
                 setTimeout(checkProgress, 1000);
@@ -589,7 +588,6 @@ def process_video():
 
 def process_video_task(task_id, form_data, user_id):
     try:
-        # Validate and set default values
         params = {
             'font_type': form_data.get('font_type', 'Arial'),
             'font_size': str(form_data.get('font_size', '24')),
@@ -600,11 +598,9 @@ def process_video_task(task_id, form_data, user_id):
             'subject': form_data.get('subject', 'general')
         }
 
-        # Verify required parameters
         if not form_data.get('video_url'):
             raise ValueError("Missing video URL")
 
-        # Format parameters as comma-separated string
         param_string = ",".join([
             params['font_type'],
             params['font_size'],
@@ -614,6 +610,7 @@ def process_video_task(task_id, form_data, user_id):
             params['style'],
             params['subject']
         ])
+        
         with task_lock:
             tasks[task_id].update({
                 'status': 'processing',
@@ -622,48 +619,69 @@ def process_video_task(task_id, form_data, user_id):
             })
         
         client = Client("rayesh/process_miniapp")
-        
-        # Process with progress updates
         job = client.submit(
             form_data['video_url'],
-            f"{form_data['font_type']},{form_data['font_size']},{form_data['font_color']},"
-            f"{form_data['service']},{form_data['target']},{form_data['style']},{form_data['subject']}",
+            param_string,
             api_name="/main"
         )
 
         while not job.done():
-            time.sleep(0.5)
-            progress_data = job.communicator.job.outputs[0].progress_data
-            if progress_data:
+            time.sleep(1)
+            progress_data = getattr(job, 'progress_data', None) or []
+            progress_value = tasks[task_id]['progress']
+            message = 'Processing...'
+            
+            try:
+                if progress_data:
+                    progress_value = progress_data[0][0] * 100
+                    message = progress_data[0][1]
+                else:
+                    progress_value = min(progress_value + 10, 90)
+            except IndexError:
+                pass
+            
+            with task_lock:
                 tasks[task_id].update({
-                    'progress': progress_data[0][0] * 100,
-                    'message': progress_data[0][1]
+                    'progress': progress_value,
+                    'message': message
                 })
 
-        result = job.outputs()
-        tasks[task_id].update({
-            'status': 'completed',
-            'progress': 100,
-            'message': 'پردازش کامل شد',
-            'result': result[1]
-        })
+        if job.failed():
+            raise RuntimeError("Gradio job failed")
+
+        result = job.result()
+        final_url = result[-1] if isinstance(result, list) else result
+
+        with task_lock:
+            tasks[task_id].update({
+                'status': 'completed',
+                'progress': 100,
+                'message': 'پردازش کامل شد',
+                'result': final_url
+            })
 
     except Exception as e:
-        tasks[task_id].update({
-            'status': 'failed',
-            'message': f'Error: {str(e)}',
-            'progress': 100
-        })
+        with task_lock:
+            tasks[task_id].update({
+                'status': 'failed',
+                'message': f'Error: {str(e)}',
+                'progress': 100
+            })
 
 @app.route('/progress/<task_id>')
 @login_required
 def get_progress(task_id):
-    return jsonify(tasks.get(task_id, {
-        'status': 'unknown',
-        'message': 'Task not found',
-        'progress': 0
-    }))
-
+    with task_lock:
+        task = tasks.get(task_id)
+    
+    if not task:
+        return jsonify({
+            'status': 'error',
+            'message': 'Task not found',
+            'progress': 0
+        }), 404
+    
+    return jsonify(task)
 
 def task_cleaner():
     while True:
@@ -671,10 +689,10 @@ def task_cleaner():
         now = time.time()
         with task_lock:
             for tid in list(tasks.keys()):
-                if now - tasks[tid].get('created_at', 0) > 3600:  # 1 hour retention
+                if now - tasks[tid].get('created_at', 0) > 3600:
                     del tasks[tid]
 
-# Start cleaner thread when app starts
 if __name__ == '__main__':
+    init_db()
     threading.Thread(target=task_cleaner, daemon=True).start()
-    app.run()
+    app.run(debug=True)
