@@ -318,11 +318,11 @@ def dashboard():
         
         # Get recent videos
         cursor.execute('''
-            SELECT video_name, url, created_at 
+            SELECT video_name, url, creation_time 
             FROM videos 
             WHERE user_id = %s 
-            AND created_at >= NOW() - INTERVAL 24 HOUR
-            ORDER BY created_at DESC
+            AND creation_time >= NOW() - INTERVAL 24 HOUR
+            ORDER BY creation_time DESC
         ''', (current_user.id,))
         videos = cursor.fetchall()
         conn.close()
