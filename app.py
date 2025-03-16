@@ -485,180 +485,44 @@ def dashboard():
 @app.route('/process_video', methods=['POST'])
 @login_required
 def process_video():
-    task_id = str(uuid.uuid4())
-    
-    # Initialize task with lock
-    with task_lock:
-        tasks[task_id] = {
-            'status': 'initializing',
-            'message': 'Starting processing...',
-            'progress': 0,
-            'result': None,
-            'created_at': time.time()
-        }
-
-    # Submit task to thread pool
-    executor.submit(
-        process_video_task,
-        task_id,
-        dict(request.form),
-        current_user.id
-    )
-    
-    return render_template_string('''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Processing Video</title>
-            <style>
-                .progress-container {
-                    margin: 20px;
-                    padding: 20px;
-                    border: 1px solid #ddd;
-                }
-                .progress-bar {
-                    width: 100%;
-                    height: 30px;
-                    background-color: #f1f1f1;
-                    margin: 10px 0;
-                }
-                .progress-fill {
-                    height: 100%;
-                    background-color: #4CAF50;
-                    transition: width 0.3s ease;
-                }
-                .status-message {
-                    margin: 10px 0;
-                    font-weight: bold;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="progress-container">
-                <h2>Video Processing Progress</h2>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progress" style="width: 0%"></div>
-                </div>
-                <div class="status-message" id="status">Starting processing...</div>
-                <div id="result"></div>
-            </div>
-
-            <script>
-                const task_id = "{{ task_id }}";
-                
-                function checkProgress() {
-                    fetch(`/progress/${task_id}`)
-                        .then(response => response.json())
-                        .then(data => {
-                            document.getElementById('progress').style.width = `${data.progress}%`;
-                            document.getElementById('status').textContent = data.message;
-                            
-                            if (data.status === 'completed') {
-                                document.getElementById('result').innerHTML = `
-                                    <a href="${data.result}" class="download-btn" download>
-                                        Download Processed Video
-                                    </a>
-                                `;
-                            } else if (data.status !== 'failed') {
-                                setTimeout(checkProgress, 1000);
-                            }
-                        });
-                }
-                
-                setTimeout(checkProgress, 1000);
-            </script>
-        </body>
-        </html>
-    ''', task_id=task_id)
-
-def process_video_task(task_id, form_data, user_id):
     try:
-        # Validate and set default values
-        params = {
-            'font_type': form_data.get('font_type', 'Arial'),
-            'font_size': str(form_data.get('font_size', '24')),
-            'font_color': form_data.get('font_color', 'black'),
-            'service': form_data.get('service', 'general'),
-            'target': form_data.get('target', 'general'),
-            'style': form_data.get('style', 'formal'),
-            'subject': form_data.get('subject', 'general')
-        }
-
-        # Verify required parameters
-        if not form_data.get('video_url'):
-            raise ValueError("Missing video URL")
-
-        # Format parameters as comma-separated string
-        param_string = ",".join([
-            params['font_type'],
-            params['font_size'],
-            params['font_color'],
-            params['service'],
-            params['target'],
-            params['style'],
-            params['subject']
-        ])
-        with task_lock:
-            tasks[task_id].update({
-                'status': 'processing',
-                'message': 'پردازش شروع شد',
-                'progress': 0
-            })
+        # Get form data
+        video_url = request.form.get('video_url')
+        font_type = request.form.get('font_type')
+        font_size = request.form.get('font_size')
+        font_color = request.form.get('font_color')
+        target = request.form.get('target')
+        style = request.form.get('style')
+        subject = request.form.get('subject')
         
-        client = Client("rayesh/process_miniapp")
+        # Construct parameters string with default service
+        service = 'default_service'  # Add default service parameter
+        parameters = f"{font_type},{font_size},{font_color},{service},{target},{style},{subject}"
         
-        # Process with progress updates
+        # Connect to Gradio app
+        client = Client("rayesh/process_miniapp")  # Adjust URL if hosted elsewhere
+        
+        # Start processing job
         job = client.submit(
-            form_data['video_url'],
-            f"{form_data['font_type']},{form_data['font_size']},{form_data['font_color']},"
-            f"{form_data['service']},{form_data['target']},{form_data['style']},{form_data['subject']}",
-            api_name="/main"
+            video_url,
+            parameters,
+            fn_index=0  # Assuming main function is first in interface
         )
-
+        
+        # Wait for completion and get result
         while not job.done():
             time.sleep(0.5)
-            progress_data = job.communicator.job.outputs[0].progress_data
-            if progress_data:
-                tasks[task_id].update({
-                    'progress': progress_data[0][0] * 100,
-                    'message': progress_data[0][1]
-                })
-
-        result = job.outputs()
-        tasks[task_id].update({
-            'status': 'completed',
-            'progress': 100,
-            'message': 'پردازش کامل شد',
-            'result': result[1]
-        })
-
+            
+        result = job.result()
+        output_video_path = result[1]['video']  # Extract final video path
+        
+        # Redirect to dashboard with success message
+        return redirect(url_for('dashboard'))
+        
     except Exception as e:
-        tasks[task_id].update({
-            'status': 'failed',
-            'message': f'Error: {str(e)}',
-            'progress': 100
-        })
-
-@app.route('/progress/<task_id>')
-@login_required
-def get_progress(task_id):
-    return jsonify(tasks.get(task_id, {
-        'status': 'unknown',
-        'message': 'Task not found',
-        'progress': 0
-    }))
-
-
-def task_cleaner():
-    while True:
-        time.sleep(60)
-        now = time.time()
-        with task_lock:
-            for tid in list(tasks.keys()):
-                if now - tasks[tid].get('created_at', 0) > 3600:  # 1 hour retention
-                    del tasks[tid]
-
+        print(f"Processing error: {e}")
+        return redirect(url_for('dashboard', error=str(e)))
+        
 # Start cleaner thread when app starts
 if __name__ == '__main__':
-    threading.Thread(target=task_cleaner, daemon=True).start()
     app.run()
