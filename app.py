@@ -436,7 +436,7 @@ def process_video():
         result = client.predict(
     		url=video_url,
     		parameters=params_string,
-            api_name="/predict"
+            api_name="/main"
         )
 
         # Handle the result (modify according to your Gradio API response)
