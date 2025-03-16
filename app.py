@@ -137,11 +137,12 @@ def validate_init_data(init_data):
 from datetime import datetime
 
 # Database configuration
+# Correct database configuration
 db_config = {
     'host': 'annapurna.liara.cloud',
     'port': 32002,
     'user': 'root',
-    'password': 'Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12',
+    'password': '4zjqmEfeRhCqYYDhvkaODXD3',  # Use correct password
     'database': 'users',
     'auth_plugin': 'mysql_native_password'
 }
@@ -244,18 +245,32 @@ def register():
     except (json.JSONDecodeError, KeyError):
         return jsonify({'error': 'Invalid user data'}), 400
     
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE bale_user_id = ?", (bale_user_id,))
-    if c.fetchone():
+    try:
+        conn = mysql.connector.connect(
+            host='annapurna.liara.cloud',
+            user='root',
+            port=32002,
+            password='4zjqmEfeRhCqYYDhvkaODXD3',
+            database='users',
+        )
+        c = conn.cursor()
+        
+        # Check if user already exists
+        c.execute("SELECT id FROM users WHERE bale_user_id = %s", (bale_user_id,))
+        if c.fetchone():
+            conn.close()
+            return jsonify({'error': 'User already exists'}), 400
+        
+        # Insert new user
+        c.execute("INSERT INTO users (bale_user_id, username) VALUES (%s, %s)", 
+                  (bale_user_id, username))
+        conn.commit()
         conn.close()
-        return jsonify({'error': 'User already exists'}), 400
-    
-    c.execute("INSERT INTO users (bale_user_id, username) VALUES (?, ?)", 
-              (bale_user_id, username))
-    conn.commit()
-    conn.close()
-    return jsonify({'message': 'User registered successfully'}), 201
+        return jsonify({'message': 'User registered successfully'}), 201
+        
+    except mysql.connector.Error as err:
+        return jsonify({'error': str(err)}), 500
+
     
 @app.route('/login', methods=['POST'])
 def login():
