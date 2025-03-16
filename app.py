@@ -5,7 +5,9 @@ import hmac
 import hashlib
 import json
 from gradio_client import Client, handle_file
-
+from concurrent.futures import ThreadPoolExecutor
+import uuid
+executor = ThreadPoolExecutor(max_workers=4)
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = 'A1u3b8e0d@#'  # Replace with a secure key in production
@@ -418,75 +420,138 @@ def dashboard():
 @app.route('/process_video', methods=['POST'])
 @login_required
 def process_video():
+    task_id = str(uuid.uuid4())
+    tasks[task_id] = {
+        'status': 'initializing',
+        'message': 'Starting processing...',
+        'progress': 0,
+        'result': None
+    }
+
+    # Submit task to thread pool
+    executor.submit(
+        process_video_task,
+        task_id,
+        dict(request.form),
+        current_user.id
+    )
+    
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Processing Video</title>
+            <style>
+                .progress-container {
+                    margin: 20px;
+                    padding: 20px;
+                    border: 1px solid #ddd;
+                }
+                .progress-bar {
+                    width: 100%;
+                    height: 30px;
+                    background-color: #f1f1f1;
+                    margin: 10px 0;
+                }
+                .progress-fill {
+                    height: 100%;
+                    background-color: #4CAF50;
+                    transition: width 0.3s ease;
+                }
+                .status-message {
+                    margin: 10px 0;
+                    font-weight: bold;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="progress-container">
+                <h2>Video Processing Progress</h2>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress" style="width: 0%"></div>
+                </div>
+                <div class="status-message" id="status">Starting processing...</div>
+                <div id="result"></div>
+            </div>
+
+            <script>
+                const task_id = "{{ task_id }}";
+                
+                function checkProgress() {
+                    fetch(`/progress/${task_id}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById('progress').style.width = `${data.progress}%`;
+                            document.getElementById('status').textContent = data.message;
+                            
+                            if (data.status === 'completed') {
+                                document.getElementById('result').innerHTML = `
+                                    <a href="${data.result}" class="download-btn" download>
+                                        Download Processed Video
+                                    </a>
+                                `;
+                            } else if (data.status !== 'failed') {
+                                setTimeout(checkProgress, 1000);
+                            }
+                        });
+                }
+                
+                setTimeout(checkProgress, 1000);
+            </script>
+        </body>
+        </html>
+    ''', task_id=task_id)
+
+def process_video_task(task_id, form_data):
     try:
-        # Get form data
-        video_url = request.form['video_url']
-        params = {
-            'font_type': request.form['font_type'],
-            'font_size': int(request.form['font_size']),
-            'font_color': request.form['font_color'],
-            'service': request.form['service'],
-            'target': request.form['target'],
-            'style': request.form['style'],
-            'subject': request.form['subject']
-        }
-        params_string = ",".join([f"{value}" for key, value in params.items()])
-        # Connect to Gradio API
-        client = Client("rayesh/process_miniapp")
-        result = client.predict(
-    		url=video_url,
-    		parameters=params_string,
-            api_name="/main"
+        tasks[task_id].update({
+            'status': 'processing',
+            'message': 'پردازش شروع شد',
+            'progress': 0
+        })
+        
+        client = Client("https://your-gradio-app.hf.space/")
+        
+        # Process with progress updates
+        job = client.submit(
+            form_data['video_url'],
+            f"{form_data['font_type']},{form_data['font_size']},{form_data['font_color']},"
+            f"{form_data['service']},{form_data['target']},{form_data['style']},{form_data['subject']}",
+            api_name="/predict"
         )
 
-        # Handle the result (modify according to your Gradio API response)
-        processed_video = handle_file(result)
-        
-        return render_template_string('''
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Processing Complete</title>
-                <style>
-                    .result { margin: 20px; padding: 20px; border: 2px solid #4CAF50; }
-                    .download-btn {
-                        background-color: #4CAF50;
-                        color: white;
-                        padding: 15px 25px;
-                        text-decoration: none;
-                        border-radius: 5px;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="result">
-                    <h2>Video Processing Complete!</h2>
-                    <p>Your customized video is ready for download:</p>
-                    <a href="{{ video_url }}" class="download-btn" download>Download Video</a>
-                </div>
-            </body>
-            </html>
-        ''', video_url=processed_video)
+        while not job.done():
+            time.sleep(0.5)
+            progress_data = job.communicator.job.outputs[0].progress_data
+            if progress_data:
+                tasks[task_id].update({
+                    'progress': progress_data[0][0] * 100,
+                    'message': progress_data[0][1]
+                })
+
+        result = job.outputs()
+        tasks[task_id].update({
+            'status': 'completed',
+            'progress': 100,
+            'message': 'پردازش کامل شد',
+            'result': result[1]
+        })
 
     except Exception as e:
-        print(f"Processing error: {e}")
-        return render_template_string('''
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Error</title>
-                <style>
-                    .error { color: #ff0000; margin: 20px; }
-                </style>
-            </head>
-            <body>
-                <div class="error">
-                    <h2>Processing Error</h2>
-                    <p>An error occurred while processing your video. Please try again.</p>
-                </div>
-            </body>
-            </html>
-        ''')
+        tasks[task_id].update({
+            'status': 'failed',
+            'message': f'Error: {str(e)}',
+            'progress': 100
+        })
+
+@app.route('/progress/<task_id>')
+@login_required
+def get_progress(task_id):
+    return jsonify(tasks.get(task_id, {
+        'status': 'unknown',
+        'message': 'Task not found',
+        'progress': 0
+    }))
 
 
 if __name__ == '__main__':
