@@ -5,8 +5,6 @@ import hmac
 import hashlib
 import json
 from gradio_client import Client, handle_file
-import asyncio
-import httpx
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -17,7 +15,6 @@ app.secret_key = 'A1u3b8e0d@#'  # Replace with a secure key in production
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
-
 
 # MySQL database setup
 def init_db():
@@ -130,20 +127,19 @@ def validate_init_data(init_data):
 
 # Route to save video data
 @app.route('/save_video', methods=['POST'])
-async def save_video():
+def save_video():
     # Get JSON data from the bot request
     data = request.get_json()
     bale_user_id = data.get('user_id')
     username = data.get('username')
     video_data = data.get('video')
     chat_id = data.get('chat_id')
-    
     # Validate required fields
     if not bale_user_id or not username or not video_data:
         return jsonify({'error': 'Missing bale_user_id, username, or video data'}), 400
 
     try:
-        # Database connection setup
+        # Connect to the database
         conn = mysql.connector.connect(
             host='annapurna.liara.cloud',
             user='root',
@@ -153,44 +149,58 @@ async def save_video():
         )
         cursor = conn.cursor()
 
-        # User handling
+        # Check if user exists by bale_user_id
         cursor.execute("SELECT id FROM users WHERE bale_user_id = %s", (bale_user_id,))
         user = cursor.fetchone()
 
         if user:
+            # User exists, use their ID
             user_id = user[0]
             cursor.execute("UPDATE users SET chat_id = %s WHERE id = %s", (chat_id, user[0]))
         else:
+            # Register new user
             cursor.execute("INSERT INTO users (bale_user_id, username) VALUES (%s, %s)", 
                           (bale_user_id, username))
             conn.commit()
-            user_id = cursor.lastrowid
+            user_id = cursor.lastrowid  # Get the new user's ID
 
         # Extract video properties
+        
         url = video_data.get('url')
         name = video_data.get('video_name')
-        
+
+        # Validate video properties
         if not all([chat_id, url, name]):
             return jsonify({'error': 'Missing video properties'}), 400
 
-        # Asynchronous Gradio request
-        try:
-            cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name) VALUES (%s, %s, %s, %s, %s)",
-                        (user_id, username, chat_id, url, name))
-            conn.commit()
-            conn.close()
-            return jsonify({'message': 'Video saved successfully'}), 201
-        except mysql.connector.Error as db_err:
-            print(f"Database error: {db_err}")
-            return jsonify({'error': 'Database operation failed'}), 500
+        try: 
+            client = Client("rayesh/previews")
+            result = client.predict(
+                    video_path={"video":handle_file(url)},
+                    api_name="/predict"
+            )
+            if result:
+                preview_images = ""
+                for i in result:
+                    preview_images+=f"{i},"
+                # Save video data to the database
+                cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name, preview_images) VALUES (%s, %s, %s, %s, %s, %s)",
+                            (user_id, username, chat_id, url, name, preview_images))
+                conn.commit()
+                conn.close()
+
+        except:
+            return jsonify({'error': 'Missin preview images'}), 400
+
+        return jsonify({'message': 'Video saved successfully'}), 201
+
     except Exception as e:
-        print(f"Unexpected error: {e}")
-        return jsonify({'error': 'Server error'}), 500
-        
+        print(f"Error in save_video: {e}")
+        return jsonify({'error': 'Database error'}), 500
 
 @app.route('/login', methods=['POST'])
-async def login():
-    init_data = await request.get_json().get('initData')
+def login():
+    init_data = request.get_json().get('initData')
     if not init_data:
         return jsonify({'error': 'Missing initData'}), 400
     is_valid, result = validate_init_data(init_data)
@@ -206,7 +216,7 @@ async def login():
     except (json.JSONDecodeError, KeyError):
         return jsonify({'error': 'Invalid user data'}), 400
     try:
-        conn = await mysql.connector.connect(
+        conn = mysql.connector.connect(
             host='annapurna.liara.cloud',
             user='root',
             password='4zjqmEfeRhCqYYDhvkaODXD3',
@@ -215,7 +225,7 @@ async def login():
         )
         cursor = conn.cursor()
         cursor.execute("SELECT id, bale_user_id, username FROM users WHERE bale_user_id = %s", (bale_user_id,))
-        user_data = await cursor.fetchone()
+        user_data = cursor.fetchone()
         conn.close()
         if user_data:
             user = User(user_data[0], user_data[1], user_data[2])
@@ -228,7 +238,7 @@ async def login():
 
 @app.route('/logout')
 @login_required
-async def logout():
+def logout():
     logout_user()
     return redirect(url_for('index'))
 
@@ -238,174 +248,75 @@ def protected():
     return jsonify({'message': f'Hello, {current_user.username}! This is a protected route.'})
 
 @app.route('/')
-async def index():
+def index():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     return render_template_string('''
     <!DOCTYPE html>
-<html>
-<head>
-    <title>Video Dashboard</title>
-    <style>
-        .video-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            padding: 20px;
-        }
-        
-        .video-card {
-            background-color: #f5f5f5;
-            border-radius: 10px;
-            padding: 20px;
-            width: 300px;
-            height: auto;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        
-        .video-name {
-            font-size: 18px;
-            margin-bottom: 10px;
-        }
-        
-        .preview-thumbnails {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            padding: 10px;
-        }
-        
-        .thumbnail {
-            width: 64px;
-            height: 48px;
-            object-fit: cover;
-            cursor: pointer;
-        }
-    </style>
-</head>
-<body>
-    <h1>Welcome to your Dashboard, {{ current_user.username }}!</h1>
-    
-    <div class="video-container">
-        {% for video in videos %}
-        <div class="video-card">
-            <div class="video-name">{{ video.video_name }}</div>
-            
-            <div class="preview-thumbnails">
-                {% if video.preview_images %}
-                {% for preview_image in video.preview_images %}
-                <img src="{{ preview_image }}" alt="Preview" class="thumbnail">
-                {% endfor %}
-                {% endif %}
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-
-    <a href="{{ url_for('index') }}">Back to Home</a>
-</body>
-</html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Auth Test</title>
+        <script src="https://tapi.bale.ai/miniapp.js?1"></script>
+    </head>
+    <body>
+        <h1>Auth Test</h1>
+        <p id="status">Checking authentication...</p>
+        <script>
+            window.onload = function() {
+                if (typeof Bale !== 'undefined' && Bale.WebApp) {
+                    const initData = Bale.WebApp.initData;
+                    if (initData) {
+                        fetch('/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ initData: initData }),
+                            credentials: 'include'  // Add this line
+                        })
+                        .then(response => {
+                            if (response.ok) {
+                                window.location.href = '/dashboard';
+                            } else if (response.status === 404) {
+                                return fetch('/register', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ initData: initData }),
+                                    credentials: 'include'  // Add this line for register too
+                                }).then(registerResponse => {
+                                    if (registerResponse.ok) {
+                                        window.location.href = '/dashboard';
+                                    } else {
+                                        return registerResponse.json().then(data => {
+                                            document.getElementById('status').textContent = 'Registration error: ' + data.error;
+                                        });
+                                    }
+                                });
+                            } else {
+                                return response.json().then(data => {
+                                    document.getElementById('status').textContent = 'Login error: ' + data.error;
+                                });
+                            }
+                        })
+                        .catch(error => {
+                            document.getElementById('status').textContent = 'Fetch error: ' + error.message;
+                        });
+                    } else {
+                        document.getElementById('status').textContent = 'No initData available';
+                    }
+                } else {
+                    document.getElementById('status').textContent = 'Bale mini-app script not loaded';
+                }
+            };
+        </script>
+    </body>
+    </html>
     ''')
 
-# Add this function to fetch user videos
-def get_user_videos(user_id):
-    try:
-        conn = mysql.connector.connect(
-            host='annapurna.liara.cloud',
-            user='root',
-            port=32002,
-            password='4zjqmEfeRhCqYYDhvkaODXD3',
-            database='users'
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT username, chat_id, url, video_name, preview_images FROM videos WHERE user_id = %s", (user_id,))
-        videos = []
-        for row in cursor.fetchall():
-            videos.append({
-                'username': row[0],
-                'chat_id': row[1],
-                'url': row[2],
-                'video_name': row[3],
-                'preview_images': row[4].split(',') if row[4] else []
-            })
-        conn.close()
-        return videos
-    except Exception as e:
-        print(f"Error getting user videos: {e}")
-        return []
-
-# Modify the dashboard route to include video data
-@app.route('/dashboard', methods=['GET'])
+@app.route('/dashboard', methods=['GET', 'POST'])  # Allows both
 @login_required
-async def dashboard():
-    videos = await get_user_videos(current_user.id)
-    return render_template_string("""<!DOCTYPE html>
-<html>
-<head>
-    <title>Video Dashboard</title>
-    <style>
-        .video-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            padding: 20px;
-        }
-        
-        .video-card {
-            background-color: #f5f5f5;
-            border-radius: 10px;
-            padding: 20px;
-            width: 300px;
-            height: auto;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        
-        .video-name {
-            font-size: 18px;
-            margin-bottom: 10px;
-        }
-        
-        .preview-thumbnails {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
-        }
-        
-        .thumbnail {
-            width: 64px;
-            height: 48px;
-            object-fit: cover;
-            cursor: pointer;
-        }
-        
-        .video-link {
-            color: blue;
-            text-decoration: none;
-        }
-    </style>
-</head>
-<body>
-    <h1>Welcome to your Dashboard, {{ current_user.username }}!</h1>
-    
-    <div class="video-container">
-        {% for video in videos %}
-        <div class="video-card">
-            <div class="video-name">{{ video.video_name }}</div>
-            
-            <div class="preview-thumbnails">
-                {% for preview_image in video.preview_images %}
-                    <img src="{{ preview_image }}" alt="Preview" class="thumbnail">
-                {% endfor %}
-            </div>
-        </div>
-        {% endfor %}
-        <a href="{{ video.url }}" class="video-link">View Video</a>
-    </div>
-</body>
-</html>
-""", videos=videos)
-
-
+def dashboard():
+    return "Welcome to the dashboard!"
 
 if __name__ == '__main__':
     init_db()
