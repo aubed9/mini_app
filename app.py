@@ -155,7 +155,6 @@ def validate_init_data(init_data):
     return True, data_dict
 
 @app.route('/save_video', methods=['POST'])
-@api_key_required
 def save_video():
     try:
         data = request.get_json()
