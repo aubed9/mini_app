@@ -303,6 +303,7 @@ def index():
     </html>
     ''')
 
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
