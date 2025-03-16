@@ -156,7 +156,6 @@ def get_db_connection():
         return None
 
 @app.route('/save_video', methods=['POST'])
-@login_required
 def save_video():
     conn = None
     cursor = None
