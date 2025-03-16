@@ -6,6 +6,9 @@ import hashlib
 import json
 from gradio_client import Client, handle_file
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
+import threading
+import time
 import uuid
 executor = ThreadPoolExecutor(max_workers=4)
 # Initialize Flask app
@@ -421,12 +424,16 @@ def dashboard():
 @login_required
 def process_video():
     task_id = str(uuid.uuid4())
-    tasks[task_id] = {
-        'status': 'initializing',
-        'message': 'Starting processing...',
-        'progress': 0,
-        'result': None
-    }
+    
+    # Initialize task with lock
+    with task_lock:
+        tasks[task_id] = {
+            'status': 'initializing',
+            'message': 'Starting processing...',
+            'progress': 0,
+            'result': None,
+            'created_at': time.time()
+        }
 
     # Submit task to thread pool
     executor.submit(
@@ -502,13 +509,14 @@ def process_video():
         </html>
     ''', task_id=task_id)
 
-def process_video_task(task_id, form_data):
+def process_video_task(task_id, form_data, user_id):
     try:
-        tasks[task_id].update({
-            'status': 'processing',
-            'message': 'پردازش شروع شد',
-            'progress': 0
-        })
+        with task_lock:
+            tasks[task_id].update({
+                'status': 'processing',
+                'message': 'پردازش شروع شد',
+                'progress': 0
+            })
         
         client = Client("https://your-gradio-app.hf.space/")
         
@@ -554,6 +562,16 @@ def get_progress(task_id):
     }))
 
 
+def task_cleaner():
+    while True:
+        time.sleep(60)
+        now = time.time()
+        with task_lock:
+            for tid in list(tasks.keys()):
+                if now - tasks[tid].get('created_at', 0) > 3600:  # 1 hour retention
+                    del tasks[tid]
+
+# Start cleaner thread when app starts
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=True)
+    threading.Thread(target=task_cleaner, daemon=True).start()
+    app.run()
