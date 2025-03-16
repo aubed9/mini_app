@@ -142,7 +142,7 @@ db_config = {
     'host': 'annapurna.liara.cloud',
     'port': 32002,
     'user': 'root',
-    'password': 'Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12',
+    'password': '4zjqmEfeRhCqYYDhvkaODXD3',
     'database': 'users',
     'auth_plugin': 'mysql_native_password'
 }
@@ -317,11 +317,11 @@ def index():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Auth Test</title>
+        <title>بررسی صحت کاربر</title>
         <script src="https://tapi.bale.ai/miniapp.js?1"></script>
     </head>
     <body>
-        <h1>Auth Test</h1>
+        <h1>بررسی صحت کاربر</h1>
         <p id="status">Checking authentication...</p>
         <script>
             window.onload = function() {
@@ -414,32 +414,32 @@ def dashboard():
                 </style>
             </head>
             <body>
-                <h1>Welcome, {{ username }}!</h1>
+                <h1>{{ username }} خوش آمدید</h1>
                 <form method="POST" action="{{ url_for('process_video') }}">
                     <div class="video-list">
-                        <h2>Select a Video:</h2>
+                        <h2>ویدئوی خود را انتخاب کنید:</h2>
                         {% if videos %}
                             {% for video in videos %}
                                 <div class="video-item">
                                     <input type="radio" name="video_url" value="{{ video.url }}" required>
                                     <strong>{{ video.video_name }}</strong><br>
                                     <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
-                                    <span class="timestamp">Uploaded at: {{ video.creation_time }}</span>
+                                    <span class="timestamp">{{ video.creation_time }} :آپلود شده در</span>
                                 </div>
                             {% endfor %}
                         {% else %}
-                            <p>No videos uploaded in the last 24 hours.</p>
+                            <p>ویدئویی در ۲۴ ساعت گذشته بارگزاری نشده است.</p>
                         {% endif %}
                     </div>
 
                     <div class="parameters">
-                        <h2>Customization Parameters:</h2>
+                        <h2>:پارامتر ها</h2>
                         <div class="param-group">
                             <label>Font Type:
                                 <select name="font_type" required>
-                                    <option value="arial">Arial</option>
-                                    <option value="yekan">Yekan</option>
-                                    <option value="nazanin">Nazanin</option>
+                                    <option value="arial">آریال</option>
+                                    <option value="yekan">یکان</option>
+                                    <option value="nazanin">نازنین</option>
                                 </select>
                             </label>
                             
@@ -449,28 +449,25 @@ def dashboard():
                             
                             <label>Font Color:
                                 <select name="font_color" required>
-                                    <option value="#yellow">Yellow</option>
-                                    <option value="#black">Black</option>
-                                    <option value="#white">White</option>
+                                    <option value="#yellow">زرد</option>
+                                    <option value="#black">مشکی</option>
+                                    <option value="#white">سفید</option>
                                 </select>
                             </label>
                         </div>
 
                         <div class="param-group">
-                            <label>Service:
-                                <input type="text" name="service" placeholder="Enter service type" required>
-                            </label>
                             
                             <label>Target Audience:
-                                <input type="text" name="target" placeholder="Enter target audience" required>
+                                <input type="text" name="target" placeholder="Enter target audience" >
                             </label>
                             
                             <label>Style:
-                                <input type="text" name="style" placeholder="Enter video style" required>
+                                <input type="text" name="style" placeholder="Enter video style" >
                             </label>
                             
                             <label>Subject:
-                                <input type="text" name="subject" placeholder="Enter main subject" required>
+                                <input type="text" name="subject" placeholder="Enter main subject" >
                             </label>
                         </div>
                     </div>
