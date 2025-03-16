@@ -155,69 +155,68 @@ def validate_init_data(init_data):
     return True, data_dict
 
 @app.route('/save_video', methods=['POST'])
-@login_required
+@api_key_required
 def save_video():
-    conn = None
-    cursor = None
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({'status': 'error', 'message': 'No data provided'}), 400
-
-        required_fields = ['bale_user_id', 'username', 'video_url', 'parameters']
+        
+        # Validate required fields based on DB schema
+        required_fields = ['user_id', 'username', 'chat_id', 'url', 'video_name']
         for field in required_fields:
             if field not in data:
-                return jsonify({'status': 'error', 'message': f'Missing field: {field}'}), 400
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Missing required field: {field}',
+                    'required_fields': required_fields
+                }), 400
 
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({'status': 'error', 'message': 'Database connection failed'}), 500
+        # Validate data types
+        if not isinstance(data['user_id'], int):
+            return jsonify({'status': 'error', 'message': 'user_id must be integer'}), 400
 
-        cursor = conn.cursor()
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS videos (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                bale_user_id VARCHAR(255) NOT NULL,
-                username VARCHAR(255) NOT NULL,
-                video_url TEXT NOT NULL,
-                parameters TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        insert_query = '''
-            INSERT INTO videos 
-            (bale_user_id, username, video_url, parameters)
-            VALUES (%s, %s, %s, %s)
-        '''
-        video_data = (
-            data['bale_user_id'],
+        # Prepare database insertion
+        query = """
+        INSERT INTO video 
+        (user_id, username, chat_id, url, video_name, creation_time)
+        VALUES (%s, %s, %s, %s, %s, NOW())
+        """
+        values = (
+            data['user_id'],
             data['username'],
-            data['video_url'],
-            data['parameters']
+            str(data['chat_id']),  # Ensure string type
+            data['url'],
+            data['video_name']
         )
-        
-        cursor.execute(insert_query, video_data)
+
+        # Execute database operation
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute(query, values)
         conn.commit()
+        
+        # Get inserted video ID
+        video_id = cursor.lastrowid
 
         return jsonify({
             'status': 'success',
-            'message': 'Video saved successfully',
-            'video_id': cursor.lastrowid
-        }), 200
+            'video_id': video_id,
+            'details': {
+                'user_id': data['user_id'],
+                'preview_url': f"{base_url}/previews/{video_id}.jpg"
+            }
+        }), 201
 
     except mysql.connector.Error as err:
-        app.logger.error(f"Database error: {err}")
-        return jsonify({'status': 'error', 'message': str(err)}), 500
+        print(f"Database Error: {str(err)}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Database operation failed',
+            'error_code': err.errno
+        }), 500
+        
     except Exception as e:
-        app.logger.error(f"Unexpected error: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-    finally:
-        if cursor:
-            cursor.close()
-        if conn and conn.is_connected():
-            conn.close()
+        print(f"Unexpected Error: {str(e)}")
+        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
 
 @app.route('/register', methods=['POST'])
 def register():
