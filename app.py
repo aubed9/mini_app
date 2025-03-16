@@ -316,7 +316,6 @@ def dashboard():
         )
         cursor = conn.cursor(dictionary=True)
         
-        # Get recent videos
         cursor.execute('''
             SELECT video_name, url, creation_time 
             FROM videos 
@@ -327,7 +326,6 @@ def dashboard():
         videos = cursor.fetchall()
         conn.close()
 
-        # Dashboard template
         return render_template_string('''
             <!DOCTYPE html>
             <html>
@@ -337,26 +335,78 @@ def dashboard():
                     body { font-family: Arial, sans-serif; margin: 20px; }
                     .video-list { margin-top: 20px; }
                     .video-item { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
-                    .video-link { color: #0066cc; text-decoration: none; }
-                    .timestamp { color: #666; font-size: 0.9em; }
+                    .parameters { margin: 20px 0; padding: 20px; border: 1px solid #ddd; }
+                    .param-group { margin: 10px 0; }
+                    label { display: block; margin: 5px 0; }
+                    input[type="text"], select, input[type="number"], input[type="color"] {
+                        width: 200px; padding: 5px; margin-bottom: 10px;
+                    }
                 </style>
             </head>
             <body>
                 <h1>Welcome, {{ username }}!</h1>
-                <div class="video-list">
-                    <h2>Recent Uploads (Last 24 Hours)</h2>
-                    {% if videos %}
-                        {% for video in videos %}
-                            <div class="video-item">
-                                <strong>{{ video.video_name }}</strong><br>
-                                <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
-                                <span class="timestamp">Uploaded at: {{ video.creation_time }}</span>
-                            </div>
-                        {% endfor %}
-                    {% else %}
-                        <p>No videos uploaded in the last 24 hours.</p>
-                    {% endif %}
-                </div>
+                <form method="POST" action="{{ url_for('process_video') }}">
+                    <div class="video-list">
+                        <h2>Select a Video:</h2>
+                        {% if videos %}
+                            {% for video in videos %}
+                                <div class="video-item">
+                                    <input type="radio" name="video_url" value="{{ video.url }}" required>
+                                    <strong>{{ video.video_name }}</strong><br>
+                                    <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
+                                    <span class="timestamp">Uploaded at: {{ video.creation_time }}</span>
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <p>No videos uploaded in the last 24 hours.</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="parameters">
+                        <h2>Customization Parameters:</h2>
+                        <div class="param-group">
+                            <label>Font Type:
+                                <select name="font_type" required>
+                                    <option value="arial">Arial</option>
+                                    <option value="yekan">Yekan</option>
+                                    <option value="nazanin">Nazanin</option>
+                                </select>
+                            </label>
+                            
+                            <label>Font Size:
+                                <input type="number" name="font_size" min="8" max="72" value="12" required>
+                            </label>
+                            
+                            <label>Font Color:
+                                <select name="font_color" required>
+                                    <option value="#yellow">Yellow</option>
+                                    <option value="#black">Black</option>
+                                    <option value="#white">White</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="param-group">
+                            <label>Service:
+                                <input type="text" name="service" placeholder="Enter service type" required>
+                            </label>
+                            
+                            <label>Target Audience:
+                                <input type="text" name="target" placeholder="Enter target audience" required>
+                            </label>
+                            
+                            <label>Style:
+                                <input type="text" name="style" placeholder="Enter video style" required>
+                            </label>
+                            
+                            <label>Subject:
+                                <input type="text" name="subject" placeholder="Enter main subject" required>
+                            </label>
+                        </div>
+                    </div>
+
+                    <input type="submit" value="Process Video">
+                </form>
             </body>
             </html>
         ''', username=current_user.username, videos=videos)
@@ -364,6 +414,79 @@ def dashboard():
     except Exception as e:
         print(f"Dashboard error: {e}")
         return "Error loading dashboard", 500
+
+@app.route('/process_video', methods=['POST'])
+@login_required
+def process_video():
+    try:
+        # Get form data
+        video_url = request.form['video_url']
+        params = {
+            'font_type': request.form['font_type'],
+            'font_size': int(request.form['font_size']),
+            'font_color': request.form['font_color'],
+            'service': request.form['service'],
+            'target': request.form['target'],
+            'style': request.form['style'],
+            'subject': request.form['subject']
+        }
+        params_string = ",".join([f"{value}" for key, value in params.items()])
+        # Connect to Gradio API
+        client = Client("rayesh/process_miniapp")
+        result = client.predict(
+    		url=video_url,
+    		parameters=params_string,
+            api_name="/predict"
+        )
+
+        # Handle the result (modify according to your Gradio API response)
+        processed_video = handle_file(result)
+        
+        return render_template_string('''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Processing Complete</title>
+                <style>
+                    .result { margin: 20px; padding: 20px; border: 2px solid #4CAF50; }
+                    .download-btn {
+                        background-color: #4CAF50;
+                        color: white;
+                        padding: 15px 25px;
+                        text-decoration: none;
+                        border-radius: 5px;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="result">
+                    <h2>Video Processing Complete!</h2>
+                    <p>Your customized video is ready for download:</p>
+                    <a href="{{ video_url }}" class="download-btn" download>Download Video</a>
+                </div>
+            </body>
+            </html>
+        ''', video_url=processed_video)
+
+    except Exception as e:
+        print(f"Processing error: {e}")
+        return render_template_string('''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Error</title>
+                <style>
+                    .error { color: #ff0000; margin: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="error">
+                    <h2>Processing Error</h2>
+                    <p>An error occurred while processing your video. Please try again.</p>
+                </div>
+            </body>
+            </html>
+        ''')
 
 
 if __name__ == '__main__':
