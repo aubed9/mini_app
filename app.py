@@ -8,8 +8,6 @@ from gradio_client import Client, handle_file
 import asyncio
 import httpx
 
-
-
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = 'A1u3b8e0d@#'  # Replace with a secure key in production
