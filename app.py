@@ -522,7 +522,7 @@ def process_video_task(task_id, form_data, user_id):
                 'progress': 0
             })
         
-        client = Client("https://your-gradio-app.hf.space/")
+        client = Client("rayesh/process_miniapp")
         
         # Process with progress updates
         job = client.submit(
