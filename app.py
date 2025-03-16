@@ -541,6 +541,31 @@ def process_video():
 
 def process_video_task(task_id, form_data, user_id):
     try:
+        # Validate and set default values
+        params = {
+            'font_type': form_data.get('font_type', 'Arial'),
+            'font_size': str(form_data.get('font_size', '24')),
+            'font_color': form_data.get('font_color', 'black'),
+            'service': form_data.get('service', 'general'),
+            'target': form_data.get('target', 'general'),
+            'style': form_data.get('style', 'formal'),
+            'subject': form_data.get('subject', 'general')
+        }
+
+        # Verify required parameters
+        if not form_data.get('video_url'):
+            raise ValueError("Missing video URL")
+
+        # Format parameters as comma-separated string
+        param_string = ",".join([
+            params['font_type'],
+            params['font_size'],
+            params['font_color'],
+            params['service'],
+            params['target'],
+            params['style'],
+            params['subject']
+        ])
         with task_lock:
             tasks[task_id].update({
                 'status': 'processing',
