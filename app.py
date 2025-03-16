@@ -223,6 +223,40 @@ def save_video():
         if conn and conn.is_connected():
             conn.close()
 
+@app.route('/register', methods=['POST'])
+def register():
+    init_data = request.get_json().get('initData')
+    if not init_data:
+        return jsonify({'error': 'Missing initData'}), 400
+    
+    is_valid, result = validate_init_data(init_data)
+    if not is_valid:
+        return jsonify({'error': result}), 400
+    data_dict = result
+    
+    user_json = data_dict.get('user')
+    if not user_json:
+        return jsonify({'error': 'Missing user data'}), 400
+    try:
+        user_data = json.loads(user_json)
+        bale_user_id = user_data['id']
+        username = user_data.get('username', '')
+    except (json.JSONDecodeError, KeyError):
+        return jsonify({'error': 'Invalid user data'}), 400
+    
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("SELECT id FROM users WHERE bale_user_id = ?", (bale_user_id,))
+    if c.fetchone():
+        conn.close()
+        return jsonify({'error': 'User already exists'}), 400
+    
+    c.execute("INSERT INTO users (bale_user_id, username) VALUES (?, ?)", 
+              (bale_user_id, username))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'User registered successfully'}), 201
+    
 @app.route('/login', methods=['POST'])
 def login():
     init_data = request.get_json().get('initData')
