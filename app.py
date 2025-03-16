@@ -174,20 +174,10 @@ def save_video():
             return jsonify({'error': 'Missing video properties'}), 400
 
         try: 
-            client = Client("rayesh/previews")
-            result = client.predict(
-                    video_path={"video":handle_file(url)},
-                    api_name="/predict"
-            )
-            if result:
-                preview_images = ""
-                for i in result:
-                    preview_images+=f"{i},"
-                # Save video data to the database
-                cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name, preview_images) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (user_id, username, chat_id, url, name, preview_images))
-                conn.commit()
-                conn.close()
+            cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name) VALUES (%s, %s, %s, %s, %s)",
+                        (user_id, username, chat_id, url, name))
+            conn.commit()
+            conn.close()
 
         except:
             return jsonify({'error': 'Missin preview images'}), 400
@@ -313,10 +303,68 @@ def index():
     </html>
     ''')
 
-@app.route('/dashboard', methods=['GET', 'POST'])  # Allows both
+@app.route('/dashboard')
 @login_required
 def dashboard():
-    return "Welcome to the dashboard!"
+    try:
+        conn = mysql.connector.connect(
+            host='annapurna.liara.cloud',
+            user='root',
+            port=32002,
+            password='4zjqmEfeRhCqYYDhvkaODXD3',
+            database='users',
+        )
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get recent videos
+        cursor.execute('''
+            SELECT video_name, url, created_at 
+            FROM videos 
+            WHERE user_id = %s 
+            AND created_at >= NOW() - INTERVAL 24 HOUR
+            ORDER BY created_at DESC
+        ''', (current_user.id,))
+        videos = cursor.fetchall()
+        conn.close()
+
+        # Dashboard template
+        return render_template_string('''
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Dashboard - {{ username }}</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .video-list { margin-top: 20px; }
+                    .video-item { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+                    .video-link { color: #0066cc; text-decoration: none; }
+                    .timestamp { color: #666; font-size: 0.9em; }
+                </style>
+            </head>
+            <body>
+                <h1>Welcome, {{ username }}!</h1>
+                <div class="video-list">
+                    <h2>Recent Uploads (Last 24 Hours)</h2>
+                    {% if videos %}
+                        {% for video in videos %}
+                            <div class="video-item">
+                                <strong>{{ video.video_name }}</strong><br>
+                                <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
+                                <span class="timestamp">Uploaded at: {{ video.creation_time }}</span>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <p>No videos uploaded in the last 24 hours.</p>
+                    {% endif %}
+                </div>
+            </body>
+            </html>
+        ''', username=current_user.username, videos=videos)
+
+    except Exception as e:
+        print(f"Dashboard error: {e}")
+        return "Error loading dashboard", 500
+
 
 if __name__ == '__main__':
     init_db()
