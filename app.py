@@ -529,7 +529,7 @@ def process_video_task(task_id, form_data, user_id):
             form_data['video_url'],
             f"{form_data['font_type']},{form_data['font_size']},{form_data['font_color']},"
             f"{form_data['service']},{form_data['target']},{form_data['style']},{form_data['subject']}",
-            api_name="/predict"
+            api_name="/main"
         )
 
         while not job.done():
