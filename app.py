@@ -508,4 +508,4 @@ def process_video():
         
 # Start cleaner thread when app starts
 if __name__ == '__main__':
-    app.run()
+    uvicorn.run(“main:app”, host=“0.0.0.0”, port=80, ws=“none”)
