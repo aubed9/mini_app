@@ -11,6 +11,7 @@ from collections import defaultdict
 import threading
 import time
 import uuid
+import aiomysql
 
 # Initialize tasks storage and lock
 tasks = defaultdict(dict)
@@ -172,36 +173,46 @@ async def save_video():
             return jsonify({'status': 'error', 'message': f'Missing field: {field}'}), 400
 
     try:
-        # Connect to the database
-        conn = await mysql.connector.connect(
+        # Using aiomysql
+        conn = await aiomysql.connect(
             host='annapurna.liara.cloud',
             user='root',
             port=32002,
             password='4zjqmEfeRhCqYYDhvkaODXD3',
-            database='users'
+            db='users'
         )
-        cursor = await conn.cursor()
+        
+        async with conn.cursor() as cursor:
+            # Check user exists
+            await cursor.execute(
+                "SELECT id FROM users WHERE bale_user_id = %s", 
+                (bale_user_id,)
+            )
+            user = await cursor.fetchone()
 
-        # Check if user exists by bale_user_id
-        await cursor.execute("SELECT id FROM users WHERE bale_user_id = %s", (bale_user_id,))
-        user = await cursor.fetchone()
+            if user:
+                # Update chat_id
+                await cursor.execute(
+                    "UPDATE users SET chat_id = %s WHERE id = %s",
+                    (chat_id, user[0])
+                )
+            else:
+                # Insert new user
+                await cursor.execute(
+                    "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
+                    (bale_user_id, username)
+                )
+                await conn.commit()
+                user_id = cursor.lastrowid
 
-        if user:
-            # User exists, use their ID
-            user_id = user[0]
-            await cursor.execute("UPDATE users SET chat_id = %s WHERE id = %s", (chat_id, user[0]))
-            print("user found")
-        else:
-            # Register new user
-            await cursor.execute("INSERT INTO users (bale_user_id, username) VALUES (%s, %s)", 
-                          (bale_user_id, username))
-            await conn.commit()
-            user_id = cursor.lastrowid  # Get the new user's ID
-            print("user created")
+            return jsonify({'status': 'success'})
 
     except Exception as e:
-        print(f"Error in save_video: {e}")
-        return jsonify({'error': 'Database error'}), 500
+        print(f"Error: {str(e)}")
+        return jsonify({'error': 'Database operation failed'}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -508,4 +519,4 @@ def process_video():
         
 # Start cleaner thread when app starts
 if __name__ == '__main__':
-    uvicorn.run(“main:app”, host=“0.0.0.0”, port=80, ws=“none”)
+    uvicorn.run("main:app", host="0.0.0.0", port=80, ws="none")
