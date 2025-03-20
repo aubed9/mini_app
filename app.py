@@ -213,12 +213,10 @@ async def save_video():
                 conn.commit()
                 conn.close()
                 return jsonify({'message': 'Video saved successfully'}), 201
-        except mysql.connector.Error as db_err:
-            print(f"Database error: {db_err}")
-            return jsonify({'error': 'Database operation failed'}), 500
+            except mysql.connector.Error as db_err:
+                print(f"Database error: {db_err}")
+                return jsonify({'error': 'Database operation failed video'}), 500
             
-            
-
     except Exception as e:
         print(f"Error: {str(e)}")
         return jsonify({'error': 'Database operation failed'}), 500
