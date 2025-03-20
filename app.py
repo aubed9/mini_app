@@ -193,6 +193,7 @@ async def save_video():
             user = await cursor.fetchone()
             print(f"user : {user}")
             if user:
+                user_id = user[0]  # This was missing!
                 # Update chat_id
                 await cursor.execute(
                     "UPDATE users SET chat_id = %s WHERE id = %s",
