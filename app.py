@@ -211,10 +211,11 @@ async def save_video():
             try:
                 await cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name) VALUES (%s, %s, %s, %s, %s)",
                             (user_id, username, chat_id, url, video_name))
-                conn.commit()
-                conn.close()
+                await conn.commit()
+                await conn.close()
                 return jsonify({'message': 'Video saved successfully'}), 201
             except mysql.connector.Error as db_err:
+                await conn.close()
                 print(f"Database error: {db_err}")
                 return jsonify({'error': 'Database operation failed video'}), 500
             
