@@ -159,6 +159,7 @@ def get_db_connection():
 
 @app.route('/save_video', methods=['POST'])
 async def save_video():
+    print("start")
     # Get JSON data from the bot request
     data = request.get_json()
     bale_user_id = data.get('bale_user_id')
@@ -174,6 +175,7 @@ async def save_video():
 
     try:
         # Using aiomysql
+        print("start connect")
         conn = await aiomysql.connect(
             host='annapurna.liara.cloud',
             user='root',
@@ -189,7 +191,7 @@ async def save_video():
                 (bale_user_id,)
             )
             user = await cursor.fetchone()
-
+            print(f"user : {user}")
             if user:
                 # Update chat_id
                 await cursor.execute(
@@ -205,7 +207,17 @@ async def save_video():
                 await conn.commit()
                 user_id = cursor.lastrowid
 
-            return jsonify({'status': 'success'})
+            try:
+                await cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name) VALUES (%s, %s, %s, %s, %s)",
+                            (user_id, username, chat_id, url, video_name))
+                conn.commit()
+                conn.close()
+                return jsonify({'message': 'Video saved successfully'}), 201
+        except mysql.connector.Error as db_err:
+            print(f"Database error: {db_err}")
+            return jsonify({'error': 'Database operation failed'}), 500
+            
+            
 
     except Exception as e:
         print(f"Error: {str(e)}")
