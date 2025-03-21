@@ -11,7 +11,7 @@ from collections import defaultdict
 import threading
 import time
 import uuid
-import aiomysql
+from aiomysql import connect, Error as aiomysqlError
 
 # Initialize tasks storage and lock
 tasks = defaultdict(dict)
@@ -160,23 +160,18 @@ def get_db_connection():
 @app.route('/save_video', methods=['POST'])
 async def save_video():
     print("start")
-    # Get JSON data from the bot request
     data = request.get_json()
-    bale_user_id = data.get('bale_user_id')
-    username = data.get('username')
-    chat_id = data.get('chat_id')
-    url = data.get('url')
-    video_name = data.get('video_name')
+    
     # Validate required fields
     required_fields = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name']
-    for field in required_fields:
-        if field not in data:
-            return jsonify({'status': 'error', 'message': f'Missing field: {field}'}), 400
+    missing = [field for field in required_fields if field not in data]
+    if missing:
+        return jsonify({'status': 'error', 'message': f'Missing fields: {", ".join(missing)}'}), 400
 
+    conn = None
     try:
-        # Using aiomysql
-        print("start connect")
-        conn = await aiomysql.connect(
+        # Database connection
+        conn = await connect(
             host='annapurna.liara.cloud',
             user='root',
             port=32002,
@@ -185,46 +180,56 @@ async def save_video():
         )
         
         async with conn.cursor() as cursor:
-            # Check user exists
+            # User handling
             await cursor.execute(
                 "SELECT id FROM users WHERE bale_user_id = %s", 
-                (bale_user_id,)
+                (data['bale_user_id'],)
             )
             user = await cursor.fetchone()
-            print(f"user : {user}")
+            
             if user:
-                user_id = user[0]  # This was missing!
+                user_id = user[0]
                 # Update chat_id
                 await cursor.execute(
                     "UPDATE users SET chat_id = %s WHERE id = %s",
-                    (chat_id, user[0])
+                    (data['chat_id'], user_id)
                 )
+                await conn.commit()
             else:
                 # Insert new user
                 await cursor.execute(
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
-                    (bale_user_id, username)
+                    (data['bale_user_id'], data['username'])
                 )
-                conn.commit()
+                await conn.commit()
                 user_id = cursor.lastrowid
 
+            # Video insertion
             try:
-                await cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name) VALUES (%s, %s, %s, %s, %s)",
-                            (user_id, username, chat_id, url, video_name))
-                conn.commit()
-                conn.close()
+                await cursor.execute(
+                    """INSERT INTO videos 
+                    (user_id, username, chat_id, url, video_name) 
+                    VALUES (%s, %s, %s, %s, %s)""",
+                    (user_id, data['username'], data['chat_id'], 
+                     data['url'], data['video_name'])
+                )
+                await conn.commit()
                 return jsonify({'message': 'Video saved successfully'}), 201
-            except mysql.connector.Error as db_err:
-                conn.close()
-                print(f"Database error: {db_err}")
-                return jsonify({'error': 'Database operation failed video'}), 500
+                
+            except aiomysqlError as db_err:
+                await conn.rollback()
+                print(f"Video insert error: {db_err}")
+                return jsonify({'error': 'Database operation failed: video insertion'}), 500
             
-    except Exception as e:
-        print(f"Error: {str(e)}")
+    except aiomysqlError as e:
+        print(f"Database error: {str(e)}")
         return jsonify({'error': 'Database operation failed'}), 500
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if conn:
+            await conn.close()
 
 @app.route('/register', methods=['POST'])
 def register():
