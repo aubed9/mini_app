@@ -205,17 +205,17 @@ async def save_video():
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
                     (bale_user_id, username)
                 )
-                await conn.commit()
+                conn.commit()
                 user_id = cursor.lastrowid
 
             try:
                 await cursor.execute("INSERT INTO videos (user_id, username, chat_id, url, video_name) VALUES (%s, %s, %s, %s, %s)",
                             (user_id, username, chat_id, url, video_name))
-                await conn.commit()
-                await conn.close()
+                conn.commit()
+                conn.close()
                 return jsonify({'message': 'Video saved successfully'}), 201
             except mysql.connector.Error as db_err:
-                await conn.close()
+                conn.close()
                 print(f"Database error: {db_err}")
                 return jsonify({'error': 'Database operation failed video'}), 500
             
