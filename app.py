@@ -189,6 +189,7 @@ async def save_video():
             
             if user:
                 user_id = user[0]
+                print(user_id)
                 # Update chat_id
                 await cursor.execute(
                     "UPDATE users SET chat_id = %s WHERE id = %s",
@@ -201,6 +202,7 @@ async def save_video():
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
                     (data['bale_user_id'], data['username'])
                 )
+                print("new user")
                 await conn.commit()
                 user_id = cursor.lastrowid
 
@@ -213,6 +215,9 @@ async def save_video():
                     (user_id, data['username'], data['chat_id'], 
                      data['url'], data['video_name'])
                 )
+                print("insert video")
+                print(user_id, data['username'], data['chat_id'], 
+                     data['url'], data['video_name'])
                 await conn.commit()
                 return jsonify({'message': 'Video saved successfully'}), 201
                 
