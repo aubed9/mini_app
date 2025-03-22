@@ -26,5 +26,8 @@ httpx
 aiomysql
 asyncmy
 Quart
+quart-auth
+
+
 
 
