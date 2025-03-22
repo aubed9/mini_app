@@ -1,6 +1,6 @@
 
 from quart import Quart, request, jsonify, render_template_string, redirect, url_for
-from quart_auth import AuthUser, login_user, logout_user, current_user, login_required, QuartAuth
+from quart_auth import AuthUser, login_user, logout_user, current_user, login_required, QuartAuth, user_loader
 import hmac
 import hashlib
 import json
