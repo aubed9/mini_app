@@ -1,6 +1,4 @@
-
-from quart import Quart, request, jsonify, render_template_string, redirect, url_for
-from quart_auth import AuthUser, login_user, logout_user, current_user, login_required, QuartAuth, user_loader
+from quart import Quart, request, jsonify, render_template_string, redirect, url_for, session
 import hmac
 import hashlib
 import json
@@ -8,39 +6,46 @@ from aiomysql import create_pool, Error as aiomysqlError
 from datetime import datetime
 import logging
 from typing import Dict, Any
+from functools import wraps
 
 # Initialize Quart app
 app = Quart(__name__)
-
-app.config["QUART_AUTH_MODE"] = "bearer"
-app.secret_key = 'A1u3b8e0d@#' # Do not use this key
-
-auth_manager = QuartAuth(app)
+app.secret_key = 'A1u3b8e0d@#'  # Should be environment variable in production
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Bot configuration
 BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"
 REQUIRED_FIELDS = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name']
 
-class User(AuthUser):
-    def __init__(self, auth_id: str, user_data: Dict[str, Any]):
-        super().__init__(auth_id)
+class User:
+    def __init__(self, user_id: int, user_data: Dict[str, Any]):
+        self.user_id = user_id
         self.user_data = user_data
 
-@auth_manager.user_loader
-async def load_user(auth_id: str) -> User:
-    """Async user loader for Quart-Auth"""
+def login_required(f):
+    @wraps(f)
+    async def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({'error': 'Unauthorized'}), 401
+        return await f(*args, **kwargs)
+    return decorated_function
+
+async def get_current_user():
+    if 'user_id' not in session:
+        return None
     try:
         async with app.pool.acquire() as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(
                     "SELECT id, bale_user_id, username FROM users WHERE id = %s",
-                    (auth_id,)
+                    (session['user_id'],)
                 )
                 user_data = await cursor.fetchone()
-                
                 if user_data:
                     return User(
-                        auth_id=str(user_data[0]),
+                        user_id=user_data[0],
                         user_data={
                             'id': user_data[0],
                             'bale_user_id': user_data[1],
@@ -48,7 +53,7 @@ async def load_user(auth_id: str) -> User:
                         }
                     )
     except Exception as e:
-        logger.error(f"User load error: {e}")
+        app.logger.error(f"User lookup error: {e}")
     return None
 
 @app.before_serving
@@ -153,7 +158,7 @@ async def save_video():
 
 @app.route('/login', methods=['POST'])
 async def login():
-    """Async user login"""
+    """Modified login endpoint with session management"""
     data = await request.get_json()
     init_data = data.get('initData')
     
@@ -172,7 +177,7 @@ async def login():
 
     try:
         async with app.pool.acquire() as conn:
-            async with conn.cursor(DictCursor) as cursor:
+            async with conn.cursor() as cursor:
                 await cursor.execute(
                     "SELECT id, bale_user_id, username FROM users WHERE bale_user_id = %s",
                     (bale_user_id,)
@@ -180,16 +185,12 @@ async def login():
                 user_record = await cursor.fetchone()
                 
                 if user_record:
-                    user = User(
-                        auth_id=str(user_record['id']),
-                        user_data=user_record
-                    )
-                    login_user(user)
+                    session['user_id'] = user_record[0]
                     return jsonify({
                         'status': 'logged_in',
                         'user': {
-                            'id': user_record['id'],
-                            'username': user_record['username']
+                            'id': user_record[0],
+                            'username': user_record[2]
                         }
                     })
                 else:
@@ -198,6 +199,13 @@ async def login():
     except Exception as e:
         app.logger.error(f"Database error: {e}")
         return jsonify({'error': 'Database error'}), 500
+
+@app.route('/logout', methods=['POST'])
+async def logout():
+    """Session termination endpoint"""
+    session.pop('user_id', None)
+    return jsonify({'status': 'logged_out'})
+
 
 @app.route('/register', methods=['POST'])
 async def register():
@@ -254,6 +262,9 @@ async def register():
 @app.route('/dashboard')
 @login_required
 async def dashboard():
+    user = await get_current_user()
+    if not user:
+        return jsonify({'error': 'Unauthorized'}), 401
     try:
         async with app.pool.acquire() as conn:
             async with conn.cursor(DictCursor) as cursor:
