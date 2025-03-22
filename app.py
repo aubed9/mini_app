@@ -196,17 +196,6 @@ async def register():
         logger.error(f"Registration error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
 
-# Database pool configuration (configure in app startup)
-@app.before_serving
-async def create_db_pool():
-    app.pool = await aiomysql.create_pool(
-        host='annapurna.liara.cloud',
-        port=32002,
-        user='root',
-        password='4zjqmEfeRhCqYYDhvkaODXD3',
-        db='users',
-        cursorclass=aiomysql.DictCursor
-    )
 
 # Modified login route
 @app.route('/login', methods=['POST'])
@@ -272,9 +261,89 @@ async def dashboard():
                 videos = await cursor.fetchall()
 
         return await render_template_string('''
-            <!DOCTYPE html>
-            <html>
-            <!-- rest of your template remains the same -->
+    <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Dashboard - {{ username }}</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .video-list { margin-top: 20px; }
+                .video-item { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+                .parameters { margin: 20px 0; padding: 20px; border: 1px solid #ddd; }
+                .param-group { margin: 10px 0; }
+                label { display: block; margin: 5px 0; }
+                input[type="text"], select, input[type="number"], input[type="color"] {
+                    width: 200px; padding: 5px; margin-bottom: 10px;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>{{ username }} خوش آمدید</h1>
+            <form method="POST" action="{{ url_for('process_video') }}">
+                <div class="video-list">
+                    <h2>ویدئوی خود را انتخاب کنید:</h2>
+                    {% if videos %}
+                        {% for video in videos %}
+                            <div class="video-item">
+                                <input type="radio" name="video_url" value="{{ video.url }}" required>
+                                <strong>{{ video.video_name }}</strong><br>
+                                <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
+                                <span class="timestamp">{{ video.creation_time }} :آپلود شده در</span>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <p>ویدئویی در ۲۴ ساعت گذشته بارگزاری نشده است.</p>
+                    {% endif %}
+                </div>
+
+                <div class="parameters">
+                    <h2>:پارامتر ها</h2>
+                    <div class="param-group">
+                        <label>:نوع فونت
+                            <select name="font_type" required>
+                                <option value="arial">آریال</option>
+                                <option value="yekan">یکان</option>
+                                <option value="nazanin">نازنین</option>
+                            </select>
+                        </label>
+                        
+                        <label>:اندازه فونت
+                            <input type="number" name="font_size" min="8" max="72" value="12" required>
+                        </label>
+                        
+                        <label>: رنگ فونت
+                            <select name="font_color" required>
+                                <option value="#yellow">زرد</option>
+                                <option value="#black">مشکی</option>
+                                <option value="#white">سفید</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <div class="param-group">
+                        
+                        <label> جامعه مخاطبین هدف شما چه کسانی هستند؟
+                            <input type="text" name="target" placeholder="دانش آموزانی که به دنبال یادگیری ریاضی هستند" >
+                        </label>
+                        
+                        <label>لحن و شیوه سخن ترجمه چگونه باشد؟
+                            <input type="text" name="style" placeholder="...خبری،‌ ساده و روان، پرهیجان" >
+                        </label>
+                        
+                        <label>موضوع اصلی ویدئوت چیه؟
+                            <input type="text" name="subject" placeholder="...آموزش ریاضی دانشگاه، تحلیل و بررسی گوشی جدید سامسونگ" >
+                        </label>
+                        
+                        <label>هر نکته دیگه که بنظرت ترجمه رو بهتر می کنه رو اینجا بنویس
+                            <input type="text" name="subject" placeholder="لغات فنی و خاص تکتنولوژی رو ترجمه نکن" >
+                        </label>
+                    </div>
+                </div>
+
+                <input type="submit" value="تایید پارامترها و ارسال؟">
+            </form>
+        </body>
+        </html>
             ''', 
             username=current_user.username, 
             videos=videos
@@ -289,14 +358,35 @@ async def dashboard():
 @login_required
 async def process_video():
     try:
-        form_data = await request.form
-        video_url = form_data.get('video_url')
-        # Rest of your processing logic
+        # Get form data
+        video_url = request.form.get('video_url')
+        font_type = request.form.get('font_type')
+        font_size = request.form.get('font_size')
+        font_color = request.form.get('font_color')
+        target = request.form.get('target')
+        style = request.form.get('style')
+        subject = request.form.get('subject')
         
+        # Construct parameters string with default service
+        service = 'default_service'  # Add default service parameter
+        parameters = f"{font_type},{font_size},{font_color},{service},{target},{style},{subject}"
+        
+        # Connect to Gradio app
+        client = Client("rayesh/process_miniapp")  # Adjust URL if hosted elsewhere
+        
+        # Start processing job
+        job = client.submit(
+            video_url,
+            parameters,
+            fn_index=0  # Assuming main function is first in interface
+        )
         # Use async sleep instead of blocking sleep
         while not job.done():
             await asyncio.sleep(0.5)
-        
+            
+        result = job.result()
+        output_video_path = result[1]['video']  # Extract final video path
+    
         return redirect(url_for('dashboard'))
         
     except Exception as e:
@@ -315,7 +405,67 @@ async def logout():
 async def index():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
-    return await render_template_string('''... your index template ...''')
+    return await render_template_string('''
+    <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>بررسی صحت کاربر</title>
+            <script src="https://tapi.bale.ai/miniapp.js?1"></script>
+        </head>
+        <body>
+            <h1>بررسی صحت کاربر</h1>
+            <p id="status">... در حال بررسی</p>
+            <script>
+                window.onload = function() {
+                    if (typeof Bale !== 'undefined' && Bale.WebApp) {
+                        const initData = Bale.WebApp.initData;
+                        if (initData) {
+                            fetch('/login', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ initData: initData }),
+                                credentials: 'include'  // Add this line
+                            })
+                            .then(response => {
+                                if (response.ok) {
+                                    window.location.href = '/dashboard';
+                                } else if (response.status === 404) {
+                                    return fetch('/register', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ initData: initData }),
+                                        credentials: 'include'  // Add this line for register too
+                                    }).then(registerResponse => {
+                                        if (registerResponse.ok) {
+                                            window.location.href = '/dashboard';
+                                        } else {
+                                            return registerResponse.json().then(data => {
+                                                document.getElementById('status').textContent = 'Registration error: ' + data.error;
+                                            });
+                                        }
+                                    });
+                                } else {
+                                    return response.json().then(data => {
+                                        document.getElementById('status').textContent = 'Login error: ' + data.error;
+                                    });
+                                }
+                            })
+                            .catch(error => {
+                                document.getElementById('status').textContent = 'Fetch error: ' + error.message;
+                            });
+                        } else {
+                            document.getElementById('status').textContent = 'No initData available';
+                        }
+                    } else {
+                        document.getElementById('status').textContent = 'Bale mini-app script not loaded';
+                    }
+                };
+            </script>
+        </body>
+        </html>
+    ''')
 
 if __name__ == '__main__':
     uvicorn.run("main:app", host="0.0.0.0", port=80)
