@@ -1,6 +1,6 @@
 
 from quart import Quart, request, jsonify, render_template_string, redirect, url_for
-from quart_auth import AuthUser, login_user, logout_user, current_user, login_required
+from quart_auth import AuthUser, login_user, logout_user, current_user, login_required, QuartAuth
 import hmac
 import hashlib
 import json
@@ -11,16 +11,11 @@ from typing import Dict, Any
 
 # Initialize Quart app
 app = Quart(__name__)
-app.secret_key = 'A1u3b8e0d@#'  # Replace with secure key in production
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+app.config["QUART_AUTH_MODE"] = "bearer"
+app.secret_key = 'A1u3b8e0d@#' # Do not use this key
 
-# Quart-Auth setup
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = "login"
+auth_manager = QuartAuth(app)
 
 # Bot configuration
 BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"
