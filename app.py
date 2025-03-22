@@ -411,13 +411,6 @@ async def process_video():
         app.logger.error(f"Processing error: {e}")
         return redirect(url_for('dashboard'))
 
-# Modified logout route
-@app.route('/logout')
-@login_required
-async def logout():
-    logout_user()
-    return redirect(url_for('index'))
-
 # Async index route
 @app.route('/')
 async def index():
