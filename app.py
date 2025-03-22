@@ -12,13 +12,17 @@ import threading
 import time
 import uuid
 from aiomysql import connect, Error as aiomysqlError
+from quart import Quart, jsonify, request
+from datetime import datetime
 
+
+app = Quart(__name__)
 # Initialize tasks storage and lock
 tasks = defaultdict(dict)
 task_lock = threading.Lock()
 executor = ThreadPoolExecutor(max_workers=4)
 # Initialize Flask app
-app = Flask(__name__)
+#app = Flask(__name__)
 app.secret_key = 'A1u3b8e0d@#'  # Replace with a secure key in production
 #app.config['SESSION_COOKIE_SECURE'] = True  # If using HTTPS
 #app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Adjust based on your cross-site requirements
@@ -77,6 +81,17 @@ def load_user(user_id):
         print(f"Error loading user: {e}")
         return None
 
+# Create a connection pool at app startup
+@app.before_serving
+async def create_db_pool():
+    app.pool = await create_pool(
+        host='annapurna.liara.cloud',
+        user='root',
+        port=32002,
+        password='4zjqmEfeRhCqYYDhvkaODXD3',
+        db='users',
+        autocommit=False  # Explicit transactions
+    )
 # Bot token
 BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"
 
@@ -136,7 +151,7 @@ def validate_init_data(init_data):
         return False, "Invalid hash, data may be tampered"
     return True, data_dict
 
-from datetime import datetime
+
 
 # Database configuration
 db_config = {
@@ -159,82 +174,51 @@ def get_db_connection():
 
 @app.route('/save_video', methods=['POST'])
 async def save_video():
-    print("start")
-    data = request.get_json()
-    
-    # Validate required fields
-    required_fields = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name']
+    data = await request.get_json()
     missing = [field for field in required_fields if field not in data]
     if missing:
-        return jsonify({'status': 'error', 'message': f'Missing fields: {", ".join(missing)}'}), 400
+        return jsonify(...), 400
 
     conn = None
     try:
-        # Database connection
-        conn = await connect(
-            host='annapurna.liara.cloud',
-            user='root',
-            port=32002,
-            password='4zjqmEfeRhCqYYDhvkaODXD3',
-            db='users'
-        )
-        
+        # Acquire connection from pool
+        conn = await app.pool.acquire()
         async with conn.cursor() as cursor:
+            # Wrap all DB ops in a single transaction
+            await conn.begin()
+
             # User handling
-            await cursor.execute(
-                "SELECT id FROM users WHERE bale_user_id = %s", 
-                (data['bale_user_id'],)
-            )
+            await cursor.execute("SELECT id FROM users WHERE bale_user_id = %s", (data['bale_user_id'],))
             user = await cursor.fetchone()
-            
             if user:
                 user_id = user[0]
-                print(user_id)
-                # Update chat_id
-                await cursor.execute(
-                    "UPDATE users SET chat_id = %s WHERE id = %s",
-                    (data['chat_id'], user_id)
-                )
-                await conn.commit()
+                await cursor.execute("UPDATE users SET chat_id = %s WHERE id = %s", (data['chat_id'], user_id))
             else:
-                # Insert new user
                 await cursor.execute(
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
                     (data['bale_user_id'], data['username'])
                 )
-                print("new user")
-                await conn.commit()
                 user_id = cursor.lastrowid
 
             # Video insertion
-            try:
-                await cursor.execute(
-                    """INSERT INTO videos 
-                    (user_id, username, chat_id, url, video_name) 
-                    VALUES (%s, %s, %s, %s, %s)""",
-                    (user_id, data['username'], data['chat_id'], 
-                     data['url'], data['video_name'])
-                )
-                print("insert video")
-                print(user_id, data['username'], data['chat_id'], 
-                     data['url'], data['video_name'])
-                await conn.commit()
-                return jsonify({'message': 'Video saved successfully'}), 201
-                
-            except aiomysqlError as db_err:
-                await conn.rollback()
-                print(f"Video insert error: {db_err}")
-                return jsonify({'error': 'Database operation failed: video insertion'}), 500
+            await cursor.execute(
+                """INSERT INTO videos (user_id, username, chat_id, url, video_name)
+                VALUES (%s, %s, %s, %s, %s)""",
+                (user_id, data['username'], data['chat_id'], data['url'], data['video_name'])
+            )
             
-    except aiomysqlError as e:
-        print(f"Database error: {str(e)}")
-        return jsonify({'error': 'Database operation failed'}), 500
+            # Commit the entire transaction
+            await conn.commit()
+            return jsonify({'message': 'Video saved successfully'}), 201
+
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
+        if conn:
+            await conn.rollback()
+        print(f"Error: {e}")
+        return jsonify({'error': 'Database operation failed'}), 500
     finally:
         if conn:
-            await conn.close()
+            await app.pool.release(conn)  # Release connection back to the pool
 
 @app.route('/register', methods=['POST'])
 def register():
