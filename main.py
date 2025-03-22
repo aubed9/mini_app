@@ -53,7 +53,6 @@ async def get_current_user():
                         }
                     )
     except Exception as e:
-        app.logger.error(f"User lookup error: {e}")
     return None
 
 @app.before_serving
@@ -95,10 +94,9 @@ async def setup_db():
                     )
                 ''')
                 await conn.commit()
-        logger.info("Database initialized successfully")
+
                 
     except Exception as e:
-        logger.critical(f"Database setup failed: {e}")
         raise
 
 # Core validation functions remain same but async where needed
