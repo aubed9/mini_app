@@ -26,7 +26,7 @@ class User(AuthUser):
         super().__init__(auth_id)
         self.user_data = user_data
 
-@login_manager.user_loader
+@auth_manager.user_loader
 async def load_user(auth_id: str) -> User:
     """Async user loader for Quart-Auth"""
     try:
@@ -150,6 +150,55 @@ async def save_video():
         logger.error(f"Unexpected error: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
+
+@app.route('/login', methods=['POST'])
+async def login():
+    """Async user login"""
+    data = await request.get_json()
+    init_data = data.get('initData')
+    
+    if not init_data:
+        return jsonify({'error': 'Missing initData'}), 400
+
+    is_valid, validation_result = validate_init_data(init_data)
+    if not is_valid:
+        return jsonify({'error': validation_result}), 400
+
+    try:
+        user_data = json.loads(validation_result.get('user', '{}'))
+        bale_user_id = user_data['id']
+    except (KeyError, json.JSONDecodeError) as e:
+        return jsonify({'error': f'Invalid user data: {e}'}), 400
+
+    try:
+        async with app.pool.acquire() as conn:
+            async with conn.cursor(DictCursor) as cursor:
+                await cursor.execute(
+                    "SELECT id, bale_user_id, username FROM users WHERE bale_user_id = %s",
+                    (bale_user_id,)
+                )
+                user_record = await cursor.fetchone()
+                
+                if user_record:
+                    user = User(
+                        auth_id=str(user_record['id']),
+                        user_data=user_record
+                    )
+                    login_user(user)
+                    return jsonify({
+                        'status': 'logged_in',
+                        'user': {
+                            'id': user_record['id'],
+                            'username': user_record['username']
+                        }
+                    })
+                else:
+                    return jsonify({'error': 'User not found'}), 404
+
+    except Exception as e:
+        app.logger.error(f"Database error: {e}")
+        return jsonify({'error': 'Database error'}), 500
+
 @app.route('/register', methods=['POST'])
 async def register():
     """Async user registration"""
@@ -172,7 +221,7 @@ async def register():
 
     try:
         async with app.pool.acquire() as conn:
-            async with conn.cursor() as cursor:
+            async with conn.cursor(DictCursor) as cursor:
                 await cursor.execute(
                     "SELECT id FROM users WHERE bale_user_id = %s",
                     (bale_user_id,)
@@ -184,67 +233,30 @@ async def register():
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
                     (bale_user_id, username)
                 )
+                user_id = cursor.lastrowid
                 await conn.commit()
+
+                new_user = User(
+                    auth_id=str(user_id),
+                    user_data={
+                        'id': user_id,
+                        'bale_user_id': bale_user_id,
+                        'username': username
+                    }
+                )
+                login_user(new_user)
                 return jsonify({'message': 'User registered successfully'}), 201
 
     except aiomysqlError as e:
         logger.error(f"Registration error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
 
-
-# Modified login route
-@app.route('/login', methods=['POST'])
-async def login():
-    """Async user login"""
-    data = await request.get_json()
-    init_data = data.get('initData')
-    
-    if not init_data:
-        return jsonify({'error': 'Missing initData'}), 400
-
-    is_valid, validation_result = validate_init_data(init_data)
-    if not is_valid:
-        return jsonify({'error': validation_result}), 400
-
-    try:
-        user_data = json.loads(validation_result.get('user', '{}'))
-        bale_user_id = user_data['id']
-    except (KeyError, json.JSONDecodeError) as e:
-        return jsonify({'error': f'Invalid user data: {e}'}), 400
-
-    try:
-        async with app.pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute(
-                    "SELECT id, bale_user_id, username FROM users WHERE bale_user_id = %s",
-                    (bale_user_id,)
-                )
-                user_record = await cursor.fetchone()
-                
-                if user_record:
-                    user = AuthUser(str(user_record['id']))
-                    login_user(user)
-                    return jsonify({
-                        'status': 'logged_in',
-                        'user': {
-                            'id': user_record['id'],
-                            'username': user_record['username']
-                        }
-                    })
-                else:
-                    return jsonify({'error': 'User not found'}), 404
-
-    except Exception as e:
-        app.logger.error(f"Database error: {e}")
-        return jsonify({'error': 'Database error'}), 500
-
-# Modified dashboard route
 @app.route('/dashboard')
 @login_required
 async def dashboard():
     try:
         async with app.pool.acquire() as conn:
-            async with conn.cursor() as cursor:
+            async with conn.cursor(DictCursor) as cursor:
                 await cursor.execute('''
                     SELECT video_name, url, creation_time 
                     FROM videos 
