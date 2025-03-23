@@ -147,10 +147,10 @@ async def save_video():
 
     except aiomysqlError as e:
         await conn.rollback()
-        logger.error(f"Database error: {e}")
+        app.logger.error(f"Database error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        app.logger.error(f"Unexpected error: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
 
@@ -259,7 +259,7 @@ async def register():
                 return jsonify({'message': 'User registered successfully'}), 201
 
     except aiomysqlError as e:
-        logger.error(f"Registration error: {e}")
+        app.logger.error(f"Registration error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
 
 @app.route('/dashboard')
