@@ -24,6 +24,7 @@ class User:
     def __init__(self, user_id: int, user_data: Dict[str, Any]):
         self.user_id = user_id
         self.user_data = user_data
+        self.is_authenticated = user_id is not None  # Add this property
 
 def login_required(f):
     @wraps(f)
@@ -456,7 +457,7 @@ async def dashboard():
             </script>
         </body>
         </html>
-        ''', username=current_user.username, videos=videos)
+        ''',  username=user.user_data['username'], videos=videos)
 
     except Exception as e:
         app.logger.error(f"Dashboard error: {e}")
@@ -465,7 +466,8 @@ async def dashboard():
 # Async index route
 @app.route('/')
 async def index():
-    if current_user.is_authenticated:
+    user = await get_current_user()
+    if user and user.is_authenticated:
         return redirect(url_for('dashboard'))
     return await render_template_string('''
     <!DOCTYPE html>
