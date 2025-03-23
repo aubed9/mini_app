@@ -54,7 +54,7 @@ async def get_current_user():
                         }
                     )
     except Exception as e:
-    return None
+        return None
 
 @app.before_serving
 async def setup_db():
