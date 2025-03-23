@@ -426,12 +426,46 @@ async def dashboard():
                 videos = await cursor.fetchall()
 
         return await render_template_string('''
-        <!DOCTYPE html>
+      <!DOCTYPE html>
         <html>
         <head>
             <title>Dashboard - {{ username }}</title>
             <style>
-                /* Existing styles... */
+                /* Combined Styles */
+                body { 
+                    font-family: Arial, sans-serif; 
+                    margin: 20px;
+                    direction: rtl;
+                }
+                .video-list { 
+                    margin-top: 20px; 
+                    padding: 15px;
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
+                }
+                .video-item { 
+                    margin: 10px 0; 
+                    padding: 10px; 
+                    border: 1px solid #ddd; 
+                    border-radius: 5px; 
+                }
+                .parameters { 
+                    margin: 20px 0; 
+                    padding: 20px; 
+                    border: 1px solid #ddd; 
+                }
+                .param-group { 
+                    margin: 10px 0; 
+                }
+                label { 
+                    display: block; 
+                    margin: 5px 0; 
+                }
+                input[type="text"], select, input[type="number"], input[type="color"] {
+                    width: 200px; 
+                    padding: 5px; 
+                    margin-bottom: 10px;
+                }
                 .progress-container {
                     display: none;
                     margin: 20px 0;
@@ -445,25 +479,84 @@ async def dashboard():
                     background-color: #4CAF50;
                     transition: width 0.3s ease;
                 }
-                #status-message { margin-top: 10px; }
+                #status-message { 
+                    margin-top: 10px; 
+                    color: #666;
+                }
             </style>
         </head>
         <body>
             <h1>{{ username }} خوش آمدید</h1>
-            
+        
             <!-- Progress Container -->
             <div class="progress-container">
                 <div class="progress-bar"></div>
                 <div id="status-message"></div>
             </div>
-
+        
             <form id="processingForm" method="POST" action="{{ url_for('process_video') }}">
-                <!-- Existing form content... -->
-                
-                <!-- Modified submit button -->
+                <div class="video-list">
+                    <h2>انتخاب ویدیو:</h2>
+                    {% if videos %}
+                        {% for video in videos %}
+                            <div class="video-item">
+                                <input type="radio" name="video_url" value="{{ video.url }}" required>
+                                <strong>{{ video.video_name }}</strong><br>
+                                <a href="{{ video.url }}" class="video-link" target="_blank">مشاهده ویدیو</a><br>
+                                <span class="timestamp">زمان آپلود: {{ video.creation_time }}</span>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <p>هیچ ویدیویی در ۲۴ ساعت گذشته آپلود نشده است.</p>
+                    {% endif %}
+                </div>
+        
+                <div class="parameters">
+                    <h2>تنظیمات سفارشی:</h2>
+                    <div class="param-group">
+                        <label>نوع فونت:
+                            <select name="font_type" required>
+                                <option value="arial">آریال</option>
+                                <option value="yekan">یکان</option>
+                                <option value="nazanin">نازنین</option>
+                            </select>
+                        </label>
+                        
+                        <label>اندازه فونت:
+                            <input type="number" name="font_size" min="8" max="72" value="12" required>
+                        </label>
+                        
+                        <label>رنگ فونت:
+                            <select name="font_color" required>
+                                <option value="#yellow">زرد</option>
+                                <option value="#black">مشکی</option>
+                                <option value="#white">سفید</option>
+                            </select>
+                        </label>
+                    </div>
+        
+                    <div class="param-group">
+                        <label>نوع سرویس:
+                            <input type="text" name="service" placeholder="نوع سرویس را وارد کنید" required>
+                        </label>
+                        
+                        <label>مخاطبان هدف:
+                            <input type="text" name="target" placeholder="مخاطبان هدف را وارد کنید" required>
+                        </label>
+                        
+                        <label>سبک:
+                            <input type="text" name="style" placeholder="سبک ویدیو را وارد کنید" required>
+                        </label>
+                        
+                        <label>موضوع اصلی:
+                            <input type="text" name="subject" placeholder="موضوع اصلی را وارد کنید" required>
+                        </label>
+                    </div>
+                </div>
+        
                 <input type="submit" value="تایید پارامترها و ارسال" onclick="startProcessing(event)">
             </form>
-
+        
             <script>
                 function startProcessing(e) {
                     e.preventDefault();
@@ -472,7 +565,7 @@ async def dashboard():
                     
                     // Show progress container
                     document.querySelector('.progress-container').style.display = 'block';
-
+        
                     fetch('/process_video', {
                         method: 'POST',
                         body: formData
@@ -485,33 +578,39 @@ async def dashboard():
                     })
                     .catch(error => {
                         console.error('Error:', error);
+                        document.getElementById('status-message').textContent = 'خطا در ارسال درخواست';
                     });
                 }
-
+        
                 function trackProgress(trackingId, progressUrl) {
                     const checkInterval = 1000;
                     const progressBar = document.querySelector('.progress-bar');
                     const statusMessage = document.getElementById('status-message');
-
+        
                     const interval = setInterval(() => {
                         fetch(progressUrl)
                             .then(response => response.json())
                             .then(data => {
                                 progressBar.style.width = data.progress + '%';
                                 statusMessage.textContent = data.message;
-
+        
                                 if (data.completed) {
                                     clearInterval(interval);
                                     if (data.status === 'completed') {
-                                        window.location.reload(); // Refresh to show new video
+                                        window.location.reload();
                                     }
                                 }
+                            })
+                            .catch(error => {
+                                console.error('Tracking error:', error);
+                                statusMessage.textContent = 'خطا در بررسی وضعیت پردازش';
+                                clearInterval(interval);
                             });
                     }, checkInterval);
                 }
             </script>
         </body>
-        </html>
+</html>
         ''',  username=user.user_data['username'], videos=videos)
 
     except Exception as e:
