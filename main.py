@@ -368,7 +368,7 @@ async def process_video():
 
         # Atomic state update
         async with app.progress_lock:  # Add this lock
-            progress_states[job.job_hash] = {
+            progress_states[job.space_id] = {
                 'status': 'started',
                 'progress': 0,
                 'message': ''
@@ -377,8 +377,8 @@ async def process_video():
         asyncio.create_task(track_progress(job))
 
         return jsonify({
-            'tracking_id': job.job_hash,
-            'progress_url': url_for('progress_status', job_id=job.job_hash)
+            'tracking_id': job.space_id,
+            'progress_url': url_for('progress_status', job_id=job.space_id)
         }), 202
 
     except Exception as e:
@@ -387,7 +387,7 @@ async def process_video():
 
 
 async def track_progress(job):
-    job_id = job.job_hash
+    job_id = job.space_id
     try:
         while not job.done():
             await asyncio.sleep(0.5)
