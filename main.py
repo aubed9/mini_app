@@ -250,7 +250,12 @@ async def register():
                         'username': username
                     }
                 )
-                login_user(new_user)
+                await cursor.execute(
+                    "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
+                    (data['bale_user_id'], data['username'])
+                )
+                user_id = cursor.lastrowid
+                
                 return jsonify({'message': 'User registered successfully'}), 201
 
     except aiomysqlError as e:
