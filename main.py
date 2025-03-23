@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Initialize Quart app
 app = Quart(__name__)
+app.progress_lock = asyncio.Lock()
 app.secret_key = 'A1u3b8e0d@#'  # Should be environment variable in production
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -328,7 +329,14 @@ executor = ThreadPoolExecutor(max_workers=4)
 @login_required
 async def process_video():
     try:
-        form_data = request.form.to_dict()
+        # Proper async form handling
+        form_data = (await request.form).to_dict()
+        
+        # Validate required parameters
+        required_params = ['video_url', 'font_type', 'font_size', 'font_color']
+        if any(param not in form_data for param in required_params):
+            return jsonify({'error': 'Missing required parameters'}), 400
+
         parameters = (
             f"{form_data['font_type']},"
             f"{form_data['font_size']},"
@@ -341,7 +349,7 @@ async def process_video():
 
         client = Client("rayesh/process_miniapp")
         
-        # Submit job asynchronously
+        # Async job submission
         loop = asyncio.get_event_loop()
         job = await loop.run_in_executor(
             executor,
@@ -352,14 +360,14 @@ async def process_video():
             )
         )
 
-        # Store initial state
-        progress_states[job.job_hash] = {
-            'status': 'started',
-            'progress': 0,
-            'message': ''
-        }
+        # Atomic state update
+        async with app.progress_lock:  # Add this lock
+            progress_states[job.job_hash] = {
+                'status': 'started',
+                'progress': 0,
+                'message': ''
+            }
 
-        # Start tracking task
         asyncio.create_task(track_progress(job))
 
         return jsonify({
@@ -368,8 +376,9 @@ async def process_video():
         }), 202
 
     except Exception as e:
-        app.logger.error(f"Processing error: {e}")
+        app.logger.error(f"Processing error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
 
 async def track_progress(job):
     job_id = job.job_hash
@@ -383,16 +392,20 @@ async def track_progress(job):
                 executor, job.outputs
             )
             
-            if outputs:
-                progress_states[job_id]['message'] = outputs[0]
-                progress_states[job_id]['progress'] = len(outputs) * 25  # Example progress calculation
+            async with app.progress_lock:
+                if outputs:
+                    progress_states[job_id]['message'] = outputs[0]
+                    progress_states[job_id]['progress'] = len(outputs) * 25
 
-        if job.done():
+        async with app.progress_lock:
             progress_states[job_id]['status'] = 'completed'
             completed_jobs.add(job_id)
+
     except Exception as e:
-        progress_states[job_id]['status'] = 'failed'
-        progress_states[job_id]['error'] = str(e)
+        async with app.progress_lock:
+            progress_states[job_id]['status'] = 'failed'
+            progress_states[job_id]['error'] = str(e)
+
 
 @app.route('/progress/<job_id>')
 @login_required
