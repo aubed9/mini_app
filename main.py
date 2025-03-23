@@ -101,6 +101,61 @@ async def setup_db():
     except Exception as e:
         raise
 
+
+def url_decode(s):
+    bytes_list = []
+    i = 0
+    while i < len(s):
+        if s[i] == '%':
+            try:
+                hex_code = s[i+1:i+3]
+                byte_val = int(hex_code, 16)
+                bytes_list.append(byte_val)
+                i += 3
+            except (ValueError, IndexError):
+                bytes_list.append(ord('%'))
+                i += 1
+        elif s[i] == '+':
+            bytes_list.append(0x20)
+            i += 1
+        else:
+            bytes_list.append(ord(s[i]))
+            i += 1
+    return bytes(bytes_list).decode('utf-8', errors='replace')
+
+def parse_qs(query_string):
+    params = {}
+    pairs = query_string.split('&')
+    for pair in pairs:
+        if not pair:
+            continue
+        parts = pair.split('=', 1)
+        key = url_decode(parts[0])
+        value = url_decode(parts[1]) if len(parts) > 1 else ''
+        if key in params:
+            if isinstance(params[key], list):
+                params[key].append(value)
+            else:
+                params[key] = [params[key], value]
+        else:
+            params[key] = value
+    return params
+
+# Validate initData
+def validate_init_data(init_data):
+    decoded_init_data = url_decode(init_data)
+    parsed_data = parse_qs(decoded_init_data)
+    data_dict = {k: v[0] if isinstance(v, list) else v for k, v in parsed_data.items()}
+    hash_value = data_dict.pop('hash', None)
+    if not hash_value:
+        return False, "Missing hash in initData"
+    sorted_keys = sorted(data_dict.keys())
+    data_check_string = "\n".join([f"{k}={data_dict[k]}" for k in sorted_keys])
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    check_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    if check_hash != hash_value:
+        return False, "Invalid hash, data may be tampered"
+    return True, data_dict
 # Core validation functions remain same but async where needed
 # [Keep the url_decode, parse_qs, validate_init_data functions unchanged]
 
