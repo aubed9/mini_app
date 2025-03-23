@@ -2,7 +2,7 @@ from quart import Quart, request, jsonify, render_template_string, redirect, url
 import hmac
 import hashlib
 import json
-from aiomysql import create_pool, Error as aiomysqlError
+from aiomysql import DictCursor, create_pool, Error as aiomysqlError
 from datetime import datetime
 import logging
 from typing import Dict, Any
