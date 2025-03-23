@@ -26,7 +26,12 @@ class User:
     def __init__(self, user_id: int, user_data: Dict[str, Any]):
         self.user_id = user_id
         self.user_data = user_data
-        self.is_authenticated = user_id is not None  # Add this property
+        self.is_authenticated = user_id is not None  # Critical fix
+        self.is_active = True
+        self.is_anonymous = False
+
+    def get_id(self) -> str:
+        return str(self.user_id)
 
 def login_required(f):
     @wraps(f)
