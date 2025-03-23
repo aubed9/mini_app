@@ -422,7 +422,7 @@ async def dashboard():
                     WHERE user_id = %s 
                     AND creation_time >= NOW() - INTERVAL 24 HOUR
                     ORDER BY creation_time DESC
-                ''', (current_user.auth_id,))
+                ''', (user.user_id,))
                 videos = await cursor.fetchall()
 
         return await render_template_string('''
