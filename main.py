@@ -8,7 +8,8 @@ import logging
 from typing import Dict, Any
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
-
+import asyncio
+from gradio_client import Client, handle_file
 # Initialize Quart app
 app = Quart(__name__)
 app.progress_lock = asyncio.Lock()
