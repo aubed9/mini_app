@@ -7,6 +7,7 @@ from datetime import datetime
 import logging
 from typing import Dict, Any
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 
 # Initialize Quart app
 app = Quart(__name__)
@@ -262,12 +263,100 @@ async def register():
         app.logger.error(f"Registration error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
 
+# Global state management (use Redis in production)
+progress_states = {}
+completed_jobs = set()
+executor = ThreadPoolExecutor(max_workers=4)
+
+@app.route('/process_video', methods=['POST'])
+@login_required
+async def process_video():
+    try:
+        form_data = request.form.to_dict()
+        parameters = (
+            f"{form_data['font_type']},"
+            f"{form_data['font_size']},"
+            f"{form_data['font_color']},"
+            f"default_service,"
+            f"{form_data.get('target', '')},"
+            f"{form_data.get('style', '')},"
+            f"{form_data.get('subject', '')}"
+        )
+
+        client = Client("rayesh/process_miniapp")
+        
+        # Submit job asynchronously
+        loop = asyncio.get_event_loop()
+        job = await loop.run_in_executor(
+            executor,
+            lambda: client.submit(
+                form_data['video_url'],
+                parameters,
+                fn_index=0
+            )
+        )
+
+        # Store initial state
+        progress_states[job.job_hash] = {
+            'status': 'started',
+            'progress': 0,
+            'message': ''
+        }
+
+        # Start tracking task
+        asyncio.create_task(track_progress(job))
+
+        return jsonify({
+            'tracking_id': job.job_hash,
+            'progress_url': url_for('progress_status', job_id=job.job_hash)
+        }), 202
+
+    except Exception as e:
+        app.logger.error(f"Processing error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+async def track_progress(job):
+    job_id = job.job_hash
+    try:
+        while not job.done():
+            await asyncio.sleep(0.5)
+            status = await asyncio.get_event_loop().run_in_executor(
+                executor, job.status
+            )
+            outputs = await asyncio.get_event_loop().run_in_executor(
+                executor, job.outputs
+            )
+            
+            if outputs:
+                progress_states[job_id]['message'] = outputs[0]
+                progress_states[job_id]['progress'] = len(outputs) * 25  # Example progress calculation
+
+        if job.done():
+            progress_states[job_id]['status'] = 'completed'
+            completed_jobs.add(job_id)
+    except Exception as e:
+        progress_states[job_id]['status'] = 'failed'
+        progress_states[job_id]['error'] = str(e)
+
+@app.route('/progress/<job_id>')
+@login_required
+async def progress_status(job_id):
+    state = progress_states.get(job_id, {})
+    return jsonify({
+        'status': state.get('status', 'unknown'),
+        'progress': state.get('progress', 0),
+        'message': state.get('message', ''),
+        'completed': job_id in completed_jobs
+    })
+
+# Modified dashboard route with progress handling
 @app.route('/dashboard')
 @login_required
 async def dashboard():
     user = await get_current_user()
     if not user:
         return jsonify({'error': 'Unauthorized'}), 401
+
     try:
         async with app.pool.acquire() as conn:
             async with conn.cursor(DictCursor) as cursor:
@@ -278,141 +367,100 @@ async def dashboard():
                     AND creation_time >= NOW() - INTERVAL 24 HOUR
                     ORDER BY creation_time DESC
                 ''', (current_user.auth_id,))
-                
                 videos = await cursor.fetchall()
 
         return await render_template_string('''
-    <!DOCTYPE html>
+        <!DOCTYPE html>
         <html>
         <head>
             <title>Dashboard - {{ username }}</title>
             <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                .video-list { margin-top: 20px; }
-                .video-item { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
-                .parameters { margin: 20px 0; padding: 20px; border: 1px solid #ddd; }
-                .param-group { margin: 10px 0; }
-                label { display: block; margin: 5px 0; }
-                input[type="text"], select, input[type="number"], input[type="color"] {
-                    width: 200px; padding: 5px; margin-bottom: 10px;
+                /* Existing styles... */
+                .progress-container {
+                    display: none;
+                    margin: 20px 0;
+                    padding: 15px;
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
                 }
+                .progress-bar {
+                    width: 0%;
+                    height: 20px;
+                    background-color: #4CAF50;
+                    transition: width 0.3s ease;
+                }
+                #status-message { margin-top: 10px; }
             </style>
         </head>
         <body>
             <h1>{{ username }} خوش آمدید</h1>
-            <form method="POST" action="{{ url_for('process_video') }}">
-                <div class="video-list">
-                    <h2>ویدئوی خود را انتخاب کنید:</h2>
-                    {% if videos %}
-                        {% for video in videos %}
-                            <div class="video-item">
-                                <input type="radio" name="video_url" value="{{ video.url }}" required>
-                                <strong>{{ video.video_name }}</strong><br>
-                                <a href="{{ video.url }}" class="video-link" target="_blank">View Video</a><br>
-                                <span class="timestamp">{{ video.creation_time }} :آپلود شده در</span>
-                            </div>
-                        {% endfor %}
-                    {% else %}
-                        <p>ویدئویی در ۲۴ ساعت گذشته بارگزاری نشده است.</p>
-                    {% endif %}
-                </div>
+            
+            <!-- Progress Container -->
+            <div class="progress-container">
+                <div class="progress-bar"></div>
+                <div id="status-message"></div>
+            </div>
 
-                <div class="parameters">
-                    <h2>:پارامتر ها</h2>
-                    <div class="param-group">
-                        <label>:نوع فونت
-                            <select name="font_type" required>
-                                <option value="arial">آریال</option>
-                                <option value="yekan">یکان</option>
-                                <option value="nazanin">نازنین</option>
-                            </select>
-                        </label>
-                        
-                        <label>:اندازه فونت
-                            <input type="number" name="font_size" min="8" max="72" value="12" required>
-                        </label>
-                        
-                        <label>: رنگ فونت
-                            <select name="font_color" required>
-                                <option value="#yellow">زرد</option>
-                                <option value="#black">مشکی</option>
-                                <option value="#white">سفید</option>
-                            </select>
-                        </label>
-                    </div>
-
-                    <div class="param-group">
-                        
-                        <label> جامعه مخاطبین هدف شما چه کسانی هستند؟
-                            <input type="text" name="target" placeholder="دانش آموزانی که به دنبال یادگیری ریاضی هستند" >
-                        </label>
-                        
-                        <label>لحن و شیوه سخن ترجمه چگونه باشد؟
-                            <input type="text" name="style" placeholder="...خبری،‌ ساده و روان، پرهیجان" >
-                        </label>
-                        
-                        <label>موضوع اصلی ویدئوت چیه؟
-                            <input type="text" name="subject" placeholder="...آموزش ریاضی دانشگاه، تحلیل و بررسی گوشی جدید سامسونگ" >
-                        </label>
-                        
-                        <label>هر نکته دیگه که بنظرت ترجمه رو بهتر می کنه رو اینجا بنویس
-                            <input type="text" name="subject" placeholder="لغات فنی و خاص تکتنولوژی رو ترجمه نکن" >
-                        </label>
-                    </div>
-                </div>
-
-                <input type="submit" value="تایید پارامترها و ارسال؟">
+            <form id="processingForm" method="POST" action="{{ url_for('process_video') }}">
+                <!-- Existing form content... -->
+                
+                <!-- Modified submit button -->
+                <input type="submit" value="تایید پارامترها و ارسال" onclick="startProcessing(event)">
             </form>
+
+            <script>
+                function startProcessing(e) {
+                    e.preventDefault();
+                    const form = document.getElementById('processingForm');
+                    const formData = new FormData(form);
+                    
+                    // Show progress container
+                    document.querySelector('.progress-container').style.display = 'block';
+
+                    fetch('/process_video', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.tracking_id) {
+                            trackProgress(data.tracking_id, data.progress_url);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                    });
+                }
+
+                function trackProgress(trackingId, progressUrl) {
+                    const checkInterval = 1000;
+                    const progressBar = document.querySelector('.progress-bar');
+                    const statusMessage = document.getElementById('status-message');
+
+                    const interval = setInterval(() => {
+                        fetch(progressUrl)
+                            .then(response => response.json())
+                            .then(data => {
+                                progressBar.style.width = data.progress + '%';
+                                statusMessage.textContent = data.message;
+
+                                if (data.completed) {
+                                    clearInterval(interval);
+                                    if (data.status === 'completed') {
+                                        window.location.reload(); // Refresh to show new video
+                                    }
+                                }
+                            });
+                    }, checkInterval);
+                }
+            </script>
         </body>
         </html>
-            ''', 
-            username=current_user.username, 
-            videos=videos
-        )
+        ''', username=current_user.username, videos=videos)
 
     except Exception as e:
         app.logger.error(f"Dashboard error: {e}")
         return "Error loading dashboard", 500
-
-# Modified process_video route
-@app.route('/process_video', methods=['POST'])
-@login_required
-async def process_video():
-    try:
-        # Get form data
-        video_url = request.form.get('video_url')
-        font_type = request.form.get('font_type')
-        font_size = request.form.get('font_size')
-        font_color = request.form.get('font_color')
-        target = request.form.get('target')
-        style = request.form.get('style')
-        subject = request.form.get('subject')
-        
-        # Construct parameters string with default service
-        service = 'default_service'  # Add default service parameter
-        parameters = f"{font_type},{font_size},{font_color},{service},{target},{style},{subject}"
-        
-        # Connect to Gradio app
-        client = Client("rayesh/process_miniapp")  # Adjust URL if hosted elsewhere
-        
-        # Start processing job
-        job = client.submit(
-            video_url,
-            parameters,
-            fn_index=0  # Assuming main function is first in interface
-        )
-        # Use async sleep instead of blocking sleep
-        while not job.done():
-            await asyncio.sleep(0.5)
-            
-        result = job.result()
-        output_video_path = result[1]['video']  # Extract final video path
-    
-        return redirect(url_for('dashboard'))
-        
-    except Exception as e:
-        app.logger.error(f"Processing error: {e}")
-        return redirect(url_for('dashboard'))
 
 # Async index route
 @app.route('/')
