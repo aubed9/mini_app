@@ -27,9 +27,9 @@ REQUIRED_FIELDS = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name']
 
 class User:
     def __init__(self, user_id: int, user_data: Dict[str, Any]):
-        self.user_id = user_id
+        self.user_id = user_id  # ✅ Correct attribute name
         self.user_data = user_data
-        self.is_authenticated = user_id is not None  # Add this property
+        self.is_authenticated = user_id is not None
 
 def login_required(f):
     @wraps(f)
@@ -414,13 +414,17 @@ async def process_video():
     try:
         user = await get_current_user()
         # CORRECTED FORM HANDLING
-        form_data = (await request.form).to_dict()  # Add await here
+        form_data = await request.form  # Get MultiDict
+        video_url = form_data.get('video_url')
         
+        if not video_url:
+            return jsonify({'error': 'آدرس ویدیو الزامی است'}), 400
+
         parameters = (
-            f"{form_data['font_type']},"
-            f"{form_data['font_size']},"
-            f"{form_data['font_color']},"
-            f"Subtitle,"
+            f"{form_data.get('font_type', 'arial')},"
+            f"{form_data.get('font_size', 12)},"
+            f"{form_data.get('font_color', 'yellow')},"
+            f"{form_data.get('service', 'default_service')},"
             f"{form_data.get('target', '')},"
             f"{form_data.get('style', '')},"
             f"{form_data.get('subject', '')}"
@@ -428,7 +432,7 @@ async def process_video():
 
         client = Client("rayesh/process_miniapp")
         job = client.submit(
-            form_data['url'],
+            video_url,
             parameters,
             fn_index=0
         )
@@ -438,7 +442,7 @@ async def process_video():
         job_id = str(uuid.uuid4())  # Generate unique job ID
         
         progress_states[job_id] = {
-            'user_id': user.auth_id,
+            'user_id': user.user_id,
             'status': 'queued',
             'progress': 0,
             'message': 'در صف پردازش',
@@ -467,7 +471,7 @@ async def progress_status(job_id):
     state = progress_states.get(job_id, {})
     user = await get_current_user()
     # Verify ownership
-    if state.get('user_id') != user.auth_id:
+    if state.get('user_id') != user.user_id:
         return jsonify({'error': 'دسترسی غیرمجاز'}), 403
     
     return jsonify({
@@ -636,9 +640,9 @@ async def dashboard():
                         
                         <label>رنگ فونت:
                             <select name="font_color" required>
-                                <option value="#yellow">زرد</option>
-                                <option value="#black">مشکی</option>
-                                <option value="#white">سفید</option>
+                                <option value="yellow">زرد</option>
+                                <option value="black">مشکی</option>
+                                <option value="white">سفید</option>
                             </select>
                         </label>
                     </div>
@@ -666,29 +670,7 @@ async def dashboard():
             </form>
         
             <script>
-                function startProcessing(e) {
-                    e.preventDefault();
-                    const form = document.getElementById('processingForm');
-                    const formData = new FormData(form);
-                    
-                    // Show progress container
-                    document.querySelector('.progress-container').style.display = 'block';
-        
-                    fetch('/process_video', {
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.tracking_id) {
-                            trackProgress(data.tracking_id, data.progress_url);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        document.getElementById('status-message').textContent = 'خطا در ارسال درخواست';
-                    });
-                }
+                
                 // Enhanced tracking with error handling
                 function trackProgress(jobId) {
                     let retryCount = 0;
