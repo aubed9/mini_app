@@ -428,7 +428,7 @@ async def process_video():
 
         client = Client("rayesh/process_miniapp")
         job = client.submit(
-            form_data['video_url'],
+            form_data['url'],
             parameters,
             fn_index=0
         )
