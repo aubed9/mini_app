@@ -269,7 +269,6 @@ async def logout():
 
 @app.route('/register', methods=['POST'])
 async def register():
-    """Async user registration"""
     data = await request.get_json()
     init_data = data.get('initData')
     
@@ -281,15 +280,19 @@ async def register():
         return jsonify({'error': validation_result}), 400
 
     try:
-        user_data = json.loads(validation_result.get('user', '{}'))
+        user_data = validation_result.get('user', {})
+        if not isinstance(user_data, dict):
+            return jsonify({'error': 'Invalid user data'}), 400
+
         bale_user_id = user_data['id']
         username = user_data.get('username', '')
-    except (KeyError, json.JSONDecodeError) as e:
-        return jsonify({'error': f'Invalid user data: {e}'}), 400
+    except KeyError as e:
+        return jsonify({'error': f'Missing field: {e}'}), 400
 
     try:
         async with app.pool.acquire() as conn:
             async with conn.cursor(DictCursor) as cursor:
+                # Check existing user
                 await cursor.execute(
                     "SELECT id FROM users WHERE bale_user_id = %s",
                     (bale_user_id,)
@@ -297,6 +300,7 @@ async def register():
                 if await cursor.fetchone():
                     return jsonify({'error': 'User already exists'}), 400
 
+                # Insert new user
                 await cursor.execute(
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
                     (bale_user_id, username)
@@ -304,23 +308,13 @@ async def register():
                 user_id = cursor.lastrowid
                 await conn.commit()
 
-                new_user = User(
-                    auth_id=str(user_id),
-                    user_data={
-                        'id': user_id,
-                        'bale_user_id': bale_user_id,
-                        'username': username
-                    }
-                )
-                await cursor.execute(
-                    "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
-                    (data['bale_user_id'], data['username'])
-                )
-                user_id = cursor.lastrowid
-                
-                return jsonify({'message': 'User registered successfully'}), 201
+                return jsonify({
+                    'message': 'User registered successfully',
+                    'user_id': user_id
+                }), 201
 
-    except aiomysqlError as e:
+    except aiomysql.Error as e:
+        await conn.rollback()
         app.logger.error(f"Registration error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
 
@@ -413,10 +407,8 @@ async def update_progress(progress_queue, job_id):
 async def process_video():
     try:
         user = await get_current_user()
-        # CORRECTED FORM HANDLING
         form_data = await request.form  # Get MultiDict
         video_url = form_data.get('video_url')
-        
         if not video_url:
             return jsonify({'error': 'آدرس ویدیو الزامی است'}), 400
 
@@ -436,11 +428,11 @@ async def process_video():
             parameters,
             fn_index=0
         )
-        
-        # Create progress queue and state
-        progress_queue = queue.Queue()
-        job_id = str(uuid.uuid4())  # Generate unique job ID
-        
+
+        # Create progress queue and set initial progress state
+        progress_queue = queue.Queue()  # Thread-safe queue
+        job_id = str(uuid.uuid4())
+
         progress_states[job_id] = {
             'user_id': user.user_id,
             'status': 'queued',
@@ -450,7 +442,9 @@ async def process_video():
             'parameters': parameters
         }
 
-        # Start processing task
+        # Start the update_progress coroutine as a background task
+        asyncio.create_task(update_progress(progress_queue, job_id))
+        # Start running the processing job
         asyncio.create_task(run_processing(job, progress_queue, job_id))
 
         return jsonify({
@@ -461,7 +455,7 @@ async def process_video():
     except Exception as e:
         app.logger.error(f"Processing error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
-    
+
 
 # Progress endpoint remains the same
 # In progress_status endpoint
@@ -698,17 +692,14 @@ async def dashboard():
                             
                             // Handle completion
                             if (data.status === 'completed') {
-                                document.getElementById('start-time').textContent = new Date().toLocaleString();
-                                if (data.result_url) {
-                                    // Dynamically add new video to list
-                                    const videoList = document.querySelector('.video-list');
-                                    const newVideo = document.createElement('div');
-                                    newVideo.className = 'video-item';
-                                    newVideo.innerHTML = `
-                                        <strong>ویدیو پردازش شده</strong><br>
-                                        <a href="${data.result_url}" target="_blank">مشاهده ویدیو</a>
-                                    `;
-                                    videoList.prepend(newVideo);
+                                // Send success data to bot
+                                if (typeof sendData === 'function') {
+                                    sendData({
+                                        event: 'video_processed',
+                                        url: data.result_url,
+                                        job_id: jobId,
+                                        timestamp: new Date().toISOString()
+                                    });
                                 }
                             } else if (data.status === 'failed') {
                                 document.getElementById('status-text').textContent = `خطا: ${data.error}`;
