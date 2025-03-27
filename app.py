@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio
 from gradio_client import Client, handle_file
 import queue
+import aiohttp
+from urllib.parse import quote_plus
 
 # Initialize Quart app
 app = Quart(__name__)
@@ -325,7 +327,7 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # Modified progress state management
 
-async def run_processing(job, progress_queue, job_id):
+async def run_processing(job, progress_queue, job_id, user_id):
     try:
         loop = asyncio.get_event_loop()
         final_video = await loop.run_in_executor(
@@ -342,19 +344,29 @@ async def run_processing(job, progress_queue, job_id):
             'result_url': final_video,
             'end_time': datetime.now().isoformat()
         })
+    
+        async with aiohttp.ClientSession() as session:
+            api_url = (
+                f"https://tapi.bale.ai/bot{BOT_TOKEN}/sendVideo"
+                f"?chat_id={user_id}&video=http://<your-gradio-app-url>/gradio_api/file={final_video}"
+            )
+            async with session.get(api_url) as response:
+                if response.status == 200:
+                    app.logger.info(
+                        f"Successfully sent video to Bale for user {user_id}"
+                    )
+                else:
+                    error_body = await response.text()
+                    app.logger.error(
+                        f"Bale API error {response.status}: {error_body}"
+                    )
+        # --- NEW CODE END ---
         
     except Exception as e:
         progress_states[job_id].update({
             'status': 'failed',
             'error': str(e),
             'end_time': datetime.now().isoformat()
-        })
-
-
-    except Exception as e:
-        progress_states[job_id].update({
-            'status': 'failed',
-            'error': str(e)
         })
         app.logger.error(f"Processing failed: {e}")
 
@@ -370,6 +382,7 @@ def process_video_job(job, progress_queue):
                     'progress': progress_msg  # Implement your progress parsing
                 })
             if video_output:
+                print(video_output)
                 final_video = video_output
         return final_video
     except Exception as e:
@@ -445,7 +458,7 @@ async def process_video():
         # Start the update_progress coroutine as a background task
         asyncio.create_task(update_progress(progress_queue, job_id))
         # Start running the processing job
-        asyncio.create_task(run_processing(job, progress_queue, job_id))
+        asyncio.create_task(run_processing(job, progress_queue, job_id, user.user_id))
 
         return jsonify({
             'tracking_id': job_id,
@@ -499,6 +512,7 @@ async def dashboard():
         <html>
         <head>
             <title>Dashboard - {{ username }}</title>
+            <script src="https://tapi.bale.ai/miniapp.js?2"></script>
             <style>
                 /* Combined Styles */
                 body { 
@@ -570,6 +584,7 @@ async def dashboard():
                     margin-top: 10px; 
                     color: #666;
                 }
+                                            
             </style>
         </head>
         <body>
@@ -694,7 +709,7 @@ async def dashboard():
                             if (data.status === 'completed') {
                                 // Send success data to bot
                                 if (typeof sendData === 'function') {
-                                    sendData({
+                                    Bale.WebApp.sendData({
                                         event: 'video_processed',
                                         url: data.result_url,
                                         job_id: jobId,
