@@ -1,3 +1,6 @@
+import uuid
+
+import aiofiles
 from quart import Quart, request, jsonify, render_template_string, redirect, url_for, session
 import hmac
 import hashlib
@@ -10,6 +13,12 @@ from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 from gradio_client import Client, handle_file
+import queue
+import aiohttp
+from urllib.parse import quote_plus
+import os
+from aiohttp import FormData
+
 # Initialize Quart app
 app = Quart(__name__)
 app.progress_lock = asyncio.Lock()
@@ -24,14 +33,9 @@ REQUIRED_FIELDS = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name']
 
 class User:
     def __init__(self, user_id: int, user_data: Dict[str, Any]):
-        self.user_id = user_id
+        self.user_id = user_id  # ✅ Correct attribute name
         self.user_data = user_data
-        self.is_authenticated = user_id is not None  # Critical fix
-        self.is_active = True
-        self.is_anonymous = False
-
-    def get_id(self) -> str:
-        return str(self.user_id)
+        self.is_authenticated = user_id is not None
 
 def login_required(f):
     @wraps(f)
@@ -271,7 +275,6 @@ async def logout():
 
 @app.route('/register', methods=['POST'])
 async def register():
-    """Async user registration"""
     data = await request.get_json()
     init_data = data.get('initData')
     
@@ -283,15 +286,19 @@ async def register():
         return jsonify({'error': validation_result}), 400
 
     try:
-        user_data = json.loads(validation_result.get('user', '{}'))
+        user_data = validation_result.get('user', {})
+        if not isinstance(user_data, dict):
+            return jsonify({'error': 'Invalid user data'}), 400
+
         bale_user_id = user_data['id']
         username = user_data.get('username', '')
-    except (KeyError, json.JSONDecodeError) as e:
-        return jsonify({'error': f'Invalid user data: {e}'}), 400
+    except KeyError as e:
+        return jsonify({'error': f'Missing field: {e}'}), 400
 
     try:
         async with app.pool.acquire() as conn:
             async with conn.cursor(DictCursor) as cursor:
+                # Check existing user
                 await cursor.execute(
                     "SELECT id FROM users WHERE bale_user_id = %s",
                     (bale_user_id,)
@@ -299,6 +306,7 @@ async def register():
                 if await cursor.fetchone():
                     return jsonify({'error': 'User already exists'}), 400
 
+                # Insert new user
                 await cursor.execute(
                     "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
                     (bale_user_id, username)
@@ -306,23 +314,13 @@ async def register():
                 user_id = cursor.lastrowid
                 await conn.commit()
 
-                new_user = User(
-                    auth_id=str(user_id),
-                    user_data={
-                        'id': user_id,
-                        'bale_user_id': bale_user_id,
-                        'username': username
-                    }
-                )
-                await cursor.execute(
-                    "INSERT INTO users (bale_user_id, username) VALUES (%s, %s)",
-                    (data['bale_user_id'], data['username'])
-                )
-                user_id = cursor.lastrowid
-                
-                return jsonify({'message': 'User registered successfully'}), 201
+                return jsonify({
+                    'message': 'User registered successfully',
+                    'user_id': user_id
+                }), 201
 
-    except aiomysqlError as e:
+    except aiomysql.Error as e:
+        await conn.rollback()
         app.logger.error(f"Registration error: {e}")
         return jsonify({'error': 'Database operation failed'}), 500
 
@@ -331,54 +329,232 @@ progress_states = {}
 completed_jobs = set()
 executor = ThreadPoolExecutor(max_workers=4)
 
+# Modified progress state management
+
+async def run_processing(job, progress_queue, job_id, user_id):
+    try:
+        loop = asyncio.get_event_loop()
+        # Ensure process_video_job returns the full path to the final video
+        final_video_path = await loop.run_in_executor(
+            executor,
+            process_video_job,
+            job,
+            progress_queue
+        )
+
+        # --- Defensive Check ---
+        if not final_video_path or not os.path.exists(final_video_path):
+             app.logger.error(f"Job {job_id}: process_video_job did not return a valid file path or file does not exist: {final_video_path}")
+             progress_states[job_id].update({
+                 'status': 'failed',
+                 'error': 'Processing failed to produce video file.',
+                 'end_time': datetime.now().isoformat()
+             })
+             # Potentially notify the user or handle the failure appropriately
+             return # Stop execution if the video file isn't there
+
+        # Update state on completion
+        progress_states[job_id].update({
+            'status': 'completed',
+            'progress': 100,
+            'result_url': final_video_path, # Store the path, or generate a URL if applicable
+            'end_time': datetime.now().isoformat()
+        })
+
+        app.logger.info(f"Job {job_id}: Processing completed. Final video at: {final_video_path}. Preparing to send to user {user_id}.")
+
+        # --- Sending Video using aiohttp.FormData ---
+        async with aiohttp.ClientSession() as session:
+            # Create a FormData object
+            form_data = FormData()
+
+            # Add regular data fields to the FormData object
+            # Ensure user_id is converted to a string if it isn't already,
+            # as form fields are typically strings.
+            form_data.add_field('chat_id', str(user_id))
+
+            # Open the video file asynchronously
+            try:
+                async with aiofiles.open(final_video_path, mode='rb') as video_f:
+                    video_filename = os.path.basename(final_video_path)
+                    app.logger.info(f"Job {job_id}: Opened file {video_filename} for upload.")
+
+                    # Add the file field to the FormData object
+                    # Arguments: field_name, file_object, filename, content_type (optional but recommended)
+                    form_data.add_field(
+                        'video',                     # The field name expected by the Bale API
+                        video_f,                     # The async file handle
+                        filename=video_filename,     # The filename to be sent
+                        content_type='video/mp4'     # Specify the content type (adjust if needed, e.g., 'video/quicktime')
+                    )
+
+                    # Define the Bale API URL
+                    # Consider moving the token and base URL to configuration/environment variables
+                    bot_token = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"
+                    url = f"https://tapi.bale.ai/bot{bot_token}/sendVideo"
+
+                    app.logger.info(f"Job {job_id}: Sending POST request to {url} with video for user {user_id}.")
+
+                    # Make the POST request using the FormData object in the 'data' parameter
+                    async with session.post(url, data=form_data) as response:
+                        # Log request details for debugging potential API issues
+                        app.logger.debug(f"Job {job_id}: Bale API response status: {response.status}")
+                        response_text = await response.text() # Read response body regardless of status for logging
+                        app.logger.debug(f"Job {job_id}: Bale API response body: {response_text}")
+
+                        if response.status == 200:
+                            app.logger.info(
+                                f"Job {job_id}: Successfully sent video to Bale for user {user_id}"
+                            )
+                            # Optionally: Clean up the generated video file after successful sending
+                            # try:
+                            #     os.remove(final_video_path)
+                            #     app.logger.info(f"Job {job_id}: Cleaned up temporary file {final_video_path}")
+                            # except OSError as e:
+                            #     app.logger.error(f"Job {job_id}: Error deleting file {final_video_path}: {e}")
+
+                        else:
+                            # Log the error with more context
+                            app.logger.error(
+                                f"Job {job_id}: Bale API error sending video for user {user_id}. Status: {response.status}, Response: {response_text}"
+                            )
+                            # Update job state to reflect API failure
+                            progress_states[job_id].update({
+                                'status': 'failed',
+                                'error': f'Bale API error: {response.status}',
+                                'api_response': response_text # Store API response for debugging
+                            })
+
+            except FileNotFoundError:
+                 app.logger.error(f"Job {job_id}: File not found error when trying to open {final_video_path} for upload.")
+                 progress_states[job_id].update({
+                     'status': 'failed',
+                     'error': 'Processed video file not found during upload attempt.',
+                     'end_time': datetime.now().isoformat()
+                 })
+            except Exception as e:
+                 app.logger.error(f"Job {job_id}: An unexpected error occurred during file upload preparation or sending: {e}", exc_info=True)
+                 progress_states[job_id].update({
+                     'status': 'failed',
+                     'error': f'Upload failed: {e}',
+                     'end_time': datetime.now().isoformat()
+                 })
+
+
+    except Exception as e:
+        # Log the exception traceback for detailed debugging
+        app.logger.error(f"Processing failed for job {job_id}: {e}", exc_info=True)
+        # Update state on failure
+        progress_states[job_id].update({
+            'status': 'failed',
+            'error': str(e),
+            'end_time': datetime.now().isoformat()
+        })
+        # Optionally re-raise the exception if needed elsewhere, or handle recovery
+        # raise e
+        # --- NEW CODE END ---
+        
+    except Exception as e:
+        progress_states[job_id].update({
+            'status': 'failed',
+            'error': str(e),
+            'end_time': datetime.now().isoformat()
+        })
+        app.logger.error(f"Processing failed: {e}")
+
+def process_video_job(job, progress_queue):
+    """Blocking video processing with progress updates"""
+    final_video = None
+    try:
+        for update in job:
+            progress_msg, video_output = update
+            if progress_msg:
+                progress_queue.put({
+                    'message': progress_msg,
+                    'progress': progress_msg  # Implement your progress parsing
+                })
+            if video_output:
+                print(video_output)
+                final_video = video_output["video"]
+        return final_video
+    except Exception as e:
+        progress_queue.put({'error': str(e)})
+        raise
+
+async def update_progress(progress_queue, job_id):
+    """Async progress state updater"""
+    while True:
+        try:
+            update = progress_queue.get_nowait()
+            
+            if update is None:  # Completion signal
+                break
+                
+            if 'error' in update:
+                progress_states[job_id].update({
+                    'status': 'failed',
+                    'error': update['error']
+                })
+                break
+                
+            progress_states[job_id].update({
+                'status': 'processing',
+                'message': update['message'],
+                'progress': update['progress']
+            })
+
+        except queue.Empty:
+            await asyncio.sleep(0.1)
+
+# Modified process_video endpoint
 @app.route('/process_video', methods=['POST'])
 @login_required
 async def process_video():
     try:
-        # Proper async form handling
-        form_data = (await request.form).to_dict()
-        
-        # Validate required parameters
-        required_params = ['video_url', 'font_type', 'font_size', 'font_color']
-        if any(param not in form_data for param in required_params):
-            return jsonify({'error': 'Missing required parameters'}), 400
+        user = await get_current_user()
+        form_data = await request.form  # Get MultiDict
+        video_url = form_data.get('video_url')
+        if not video_url:
+            return jsonify({'error': 'آدرس ویدیو الزامی است'}), 400
 
         parameters = (
-            f"{form_data['font_type']},"
-            f"{form_data['font_size']},"
-            f"{form_data['font_color']},"
-            f"default_service,"
+            f"{form_data.get('font_type', 'arial')},"
+            f"{form_data.get('font_size', 12)},"
+            f"{form_data.get('font_color', 'yellow')},"
+            f"{form_data.get('service', 'default_service')},"
             f"{form_data.get('target', '')},"
             f"{form_data.get('style', '')},"
             f"{form_data.get('subject', '')}"
         )
 
         client = Client("rayesh/process_miniapp")
-        
-        # Async job submission
-        loop = asyncio.get_event_loop()
-        job = await loop.run_in_executor(
-            executor,
-            lambda: client.submit(
-                form_data['video_url'],
-                parameters,
-                fn_index=0
-            )
+        job = client.submit(
+            video_url,
+            parameters,
+            fn_index=0
         )
 
-        # Atomic state update
-        async with app.progress_lock:  # Add this lock
-            progress_states[job.space_id] = {
-                'status': 'started',
-                'progress': 0,
-                'message': ''
-            }
+        # Create progress queue and set initial progress state
+        progress_queue = queue.Queue()  # Thread-safe queue
+        job_id = str(uuid.uuid4())
 
-        asyncio.create_task(track_progress(job))
+        progress_states[job_id] = {
+            'user_id': user.user_id,
+            'status': 'queued',
+            'progress': 0,
+            'message': 'در صف پردازش',
+            'start_time': datetime.now().isoformat(),
+            'parameters': parameters
+        }
+
+        # Start the update_progress coroutine as a background task
+        asyncio.create_task(update_progress(progress_queue, job_id))
+        # Start running the processing job
+        asyncio.create_task(run_processing(job, progress_queue, job_id, user.user_id))
 
         return jsonify({
-            'tracking_id': job.space_id,
-            'progress_url': url_for('progress_status', job_id=job.space_id)
+            'tracking_id': job_id,
+            'progress_url': url_for('progress_status', job_id=job_id)
         }), 202
 
     except Exception as e:
@@ -386,44 +562,23 @@ async def process_video():
         return jsonify({'error': str(e)}), 500
 
 
-async def track_progress(job):
-    job_id = job.space_id
-    try:
-        while not job.done():
-            await asyncio.sleep(0.5)
-            status = await asyncio.get_event_loop().run_in_executor(
-                executor, job.status
-            )
-            outputs = await asyncio.get_event_loop().run_in_executor(
-                executor, job.outputs
-            )
-            
-            async with app.progress_lock:
-                if outputs:
-                    progress_states[job_id]['message'] = outputs[0]
-                    progress_states[job_id]['progress'] = len(outputs) * 25
-
-        async with app.progress_lock:
-            progress_states[job_id]['status'] = 'completed'
-            completed_jobs.add(job_id)
-
-    except Exception as e:
-        async with app.progress_lock:
-            progress_states[job_id]['status'] = 'failed'
-            progress_states[job_id]['error'] = str(e)
-
-
+# Progress endpoint remains the same
+# In progress_status endpoint
 @app.route('/progress/<job_id>')
 @login_required
 async def progress_status(job_id):
     state = progress_states.get(job_id, {})
+    user = await get_current_user()
+    # Verify ownership
+    if state.get('user_id') != user.user_id:
+        return jsonify({'error': 'دسترسی غیرمجاز'}), 403
+    
     return jsonify({
         'status': state.get('status', 'unknown'),
         'progress': state.get('progress', 0),
         'message': state.get('message', ''),
-        'completed': job_id in completed_jobs
+        'result_url': state.get('result_url')
     })
-
 # Modified dashboard route with progress handling
 @app.route('/dashboard')
 @login_required
@@ -449,6 +604,7 @@ async def dashboard():
         <html>
         <head>
             <title>Dashboard - {{ username }}</title>
+            <script src="https://tapi.bale.ai/miniapp.js?2"></script>
             <style>
                 /* Combined Styles */
                 body { 
@@ -498,10 +654,29 @@ async def dashboard():
                     background-color: #4CAF50;
                     transition: width 0.3s ease;
                 }
+                .progress-states {
+                margin: 20px 0;
+                border-collapse: collapse;
+                width: 100%;
+                }
+                .progress-states td {
+                    padding: 8px;
+                    border: 1px solid #ddd;
+                }
+                .status-indicator {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 50%;
+                    display: inline-block;
+                }
+                .processing { background-color: #ffd700; }
+                .completed { background-color: #4CAF50; }
+                .failed { background-color: #ff4444; }                           
                 #status-message { 
                     margin-top: 10px; 
                     color: #666;
                 }
+                                            
             </style>
         </head>
         <body>
@@ -509,9 +684,28 @@ async def dashboard():
         
             <!-- Progress Container -->
             <div class="progress-container">
-                <div class="progress-bar"></div>
-                <div id="status-message"></div>
-            </div>
+                    <h2>وضعیت پردازش فعلی</h2>
+                    <div class="progress-bar"></div>
+                    <div id="status-message"></div>
+                    <table class="progress-states">
+                        <tr>
+                            <td>شناسه کار:</td>
+                            <td id="job-id">---</td>
+                        </tr>
+                        <tr>
+                            <td>زمان شروع:</td>
+                            <td id="start-time">---</td>
+                        </tr>
+                        <tr>
+                            <td>وضعیت فعلی:</td>
+                            <td>
+                                <span id="current-status" class="status-indicator"></span>
+                                <span id="status-text">در انتظار شروع</span>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
         
             <form id="processingForm" method="POST" action="{{ url_for('process_video') }}">
                 <div class="video-list">
@@ -547,9 +741,9 @@ async def dashboard():
                         
                         <label>رنگ فونت:
                             <select name="font_color" required>
-                                <option value="#yellow">زرد</option>
-                                <option value="#black">مشکی</option>
-                                <option value="#white">سفید</option>
+                                <option value="yellow">زرد</option>
+                                <option value="black">مشکی</option>
+                                <option value="white">سفید</option>
                             </select>
                         </label>
                     </div>
@@ -577,55 +771,109 @@ async def dashboard():
             </form>
         
             <script>
-                function startProcessing(e) {
+                
+                // Enhanced tracking with error handling
+                function trackProgress(jobId) {
+                    let retryCount = 0;
+                    const maxRetries = 5;
+                    const progressUrl = `/progress/${jobId}`;
+
+                    const updateProgress = async () => {
+                        try {
+                            const response = await fetch(progressUrl);
+                            
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+                            
+                            const data = await response.json();
+                            
+                            // Update UI elements
+                            document.querySelector('.progress-bar').style.width = `${data.progress}%`;
+                            document.getElementById('status-text').textContent = data.message;
+                            document.getElementById('job-id').textContent = jobId;
+                            
+                            // Update status indicator
+                            const statusIndicator = document.getElementById('current-status');
+                            statusIndicator.className = 'status-indicator ' + data.status;
+                            
+                            // Handle completion
+                            if (data.status === 'completed') {
+                                // Send success data to bot
+                                if (typeof sendData === 'function') {
+                                    Bale.WebApp.sendData({
+                                        event: 'video_processed',
+                                        url: data.result_url,
+                                        job_id: jobId,
+                                        timestamp: new Date().toISOString()
+                                    });
+                                }
+                            } else if (data.status === 'failed') {
+                                document.getElementById('status-text').textContent = `خطا: ${data.error}`;
+                            }
+
+                            // Continue polling if still processing
+                            if (!['completed', 'failed'].includes(data.status)) {
+                                setTimeout(updateProgress, 1000);
+                            }
+
+                        } catch (error) {
+                            if (retryCount < maxRetries) {
+                                retryCount++;
+                                setTimeout(updateProgress, 1000 * retryCount);
+                            } else {
+                                document.getElementById('status-text').textContent = 
+                                    'خطا در ارتباط با سرور. لطفا صفحه را رفرش کنید.';
+                            }
+                        }
+                    };
+
+                    // Get initial job metadata
+                    fetch(`/job_meta/${jobId}`)
+                        .then(response => response.json())
+                        .then(meta => {
+                            document.getElementById('start-time').textContent = 
+                                new Date(meta.start_time).toLocaleString();
+                        });
+
+                    updateProgress();
+                }
+
+                // Modified startProcessing with enhanced error handling
+                async function startProcessing(e) {
                     e.preventDefault();
                     const form = document.getElementById('processingForm');
                     const formData = new FormData(form);
                     
-                    // Show progress container
-                    document.querySelector('.progress-container').style.display = 'block';
-        
-                    fetch('/process_video', {
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.tracking_id) {
-                            trackProgress(data.tracking_id, data.progress_url);
+                    try {
+                        // Show progress section
+                        document.querySelector('.progress-container').style.display = 'block';
+                        document.getElementById('status-text').textContent = 'در حال آماده سازی پردازش...';
+
+                        const response = await fetch('/process_video', {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
                         }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        document.getElementById('status-message').textContent = 'خطا در ارسال درخواست';
-                    });
-                }
-        
-                function trackProgress(trackingId, progressUrl) {
-                    const checkInterval = 1000;
-                    const progressBar = document.querySelector('.progress-bar');
-                    const statusMessage = document.getElementById('status-message');
-        
-                    const interval = setInterval(() => {
-                        fetch(progressUrl)
-                            .then(response => response.json())
-                            .then(data => {
-                                progressBar.style.width = data.progress + '%';
-                                statusMessage.textContent = data.message;
-        
-                                if (data.completed) {
-                                    clearInterval(interval);
-                                    if (data.status === 'completed') {
-                                        window.location.reload();
-                                    }
-                                }
-                            })
-                            .catch(error => {
-                                console.error('Tracking error:', error);
-                                statusMessage.textContent = 'خطا در بررسی وضعیت پردازش';
-                                clearInterval(interval);
-                            });
-                    }, checkInterval);
+
+                        const data = await response.json();
+                        
+                        if (data.tracking_id) {
+                            trackProgress(data.tracking_id);
+                        } else {
+                            throw new Error('Missing tracking ID in response');
+                        }
+
+                    } catch (error) {
+                        console.error('Processing error:', error);
+                        document.getElementById('status-text').textContent = 
+                            `خطا در شروع پردازش: ${error.message}`;
+                        document.getElementById('current-status').className = 
+                            'status-indicator failed';
+                    }
                 }
             </script>
         </body>
