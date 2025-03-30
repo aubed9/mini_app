@@ -372,7 +372,7 @@ async def run_processing(job, progress_queue, job_id, user_id):
             # Ensure user_id is converted to a string if it isn't already,
             # as form fields are typically strings.
             form_data.add_field('chat_id', str(user_id))
-
+            print(user_id)
             # Open the video file asynchronously
             try:
                 async with aiofiles.open(final_video_path, mode='rb') as video_f:
@@ -550,7 +550,7 @@ async def process_video():
         # Start the update_progress coroutine as a background task
         asyncio.create_task(update_progress(progress_queue, job_id))
         # Start running the processing job
-        asyncio.create_task(run_processing(job, progress_queue, job_id, user.user_id))
+        asyncio.create_task(run_processing(job, progress_queue, job_id, user.user_data["bale_user_id"]))
 
         return jsonify({
             'tracking_id': job_id,
