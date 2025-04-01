@@ -1,151 +1,266 @@
 import uuid
-
-import aiofiles
-from quart import Quart, request, jsonify, render_template_string, redirect, url_for, session
+import asyncio
+import json
 import hmac
 import hashlib
-import json
-from aiomysql import DictCursor, create_pool, Error as aiomysqlError
-from datetime import datetime
+import queue
+import os
 import logging
-from typing import Dict, Any
+from datetime import datetime
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
-import asyncio
-from gradio_client import Client, handle_file
-import queue
-import aiohttp
-from urllib.parse import quote_plus
-import os
-from aiohttp import FormData
 from typing import Dict, Any, Tuple, Union, List
-from functools import wraps
 
+import aiofiles  # For async file operations
+import aiohttp   # For async HTTP requests
+from aiohttp import FormData # For multipart/form-data uploads
+from aiomysql import DictCursor, create_pool, Error as aiomysqlError # Async MySQL
+from quart import (
+    Quart, request, jsonify, render_template_string, redirect, url_for, session
+)
+from gradio_client import Client # Assuming this client has async capabilities or is used in threads
+# Note: `handle_file` might need async adaptation if used directly in async context
 
-# Initialize Quart app
+# --- Logging Setup ---
+# Configure logging for better debugging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- Initialize Quart App ---
 app = Quart(__name__)
-app.progress_lock = asyncio.Lock()
-app.secret_key = 'A1u3b8e0d@#'  # Should be environment variable in production
-app.config['SESSION_COOKIE_SECURE'] = True
+app.secret_key = os.environ.get('QUART_SECRET_KEY', 'A1u3b8e0d@#_default_dev_key') # Use env var
+app.config['SESSION_COOKIE_SECURE'] = True # Recommended for production (requires HTTPS)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
-# Bot configuration
-BOT_TOKEN = "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12"
+# --- Configuration ---
+# It's highly recommended to load sensitive info from environment variables
+BOT_TOKEN = os.environ.get("BALE_BOT_TOKEN", "640108494:Y4Hr2wDc8hdMjMUZPJ5DqL7j8GfSwJIETGpwMH12") # Example placeholder
 REQUIRED_FIELDS = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name']
+DB_CONFIG = {
+    'host': os.environ.get('DB_HOST', 'annapurna.liara.cloud'),
+    'user': os.environ.get('DB_USER', 'root'),
+    'port': int(os.environ.get('DB_PORT', 32002)),
+    'password': os.environ.get('DB_PASSWORD', '4zjqmEfeRhCqYYDhvkaODXD3'), # Store securely!
+    'db': os.environ.get('DB_NAME', 'users'),
+    'autocommit': False, # Explicit commits/rollbacks are generally safer
+    'minsize': 3,
+    'maxsize': 10
+}
+REQUIRED_VIDEO_SAVE_FIELDS = ['bale_user_id', 'username', 'chat_id', 'url', 'video_name'] # Specific to save_video endpoint
 
+# --- Global State (Consider Redis/external store for production scalability) ---
+progress_states: Dict[str, Dict[str, Any]] = {} # Stores job progress {job_id: state_dict}
+# completed_jobs = set() # If needed for tracking completed jobs separately
+executor = ThreadPoolExecutor(max_workers=int(os.environ.get('THREAD_POOL_WORKERS', 4))) # For running blocking code
+
+# --- User Class ---
 class User:
+    """Represents an authenticated user."""
     def __init__(self, user_id: int, user_data: Dict[str, Any]):
-        self.user_id = user_id  # ✅ Correct attribute name
-        self.user_data = user_data
-        self.is_authenticated = user_id is not None
+        self.user_id: int = user_id # Internal DB ID
+        self.user_data: Dict[str, Any] = user_data # Other details like bale_user_id, username
+        self.is_authenticated: bool = user_id is not None
 
+    def __repr__(self) -> str:
+        return f"<User id={self.user_id} bale_id={self.user_data.get('bale_user_id')} username='{self.user_data.get('username')}'>"
+
+# --- Decorators ---
 def login_required(f):
+    """Decorator to ensure the user is logged in via session."""
     @wraps(f)
     async def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
-            return jsonify({'error': 'Unauthorized'}), 401
+            logger.warning("Unauthorized access attempt blocked by login_required.")
+            return jsonify({'error': 'Unauthorized Access', 'message': 'Please log in.'}), 401
+        # Optionally, fetch the user object here if needed universally in protected routes
+        # user = await get_current_user()
+        # if not user:
+        #     session.pop('user_id', None) # Clean up invalid session
+        #     return jsonify({'error': 'Unauthorized Access', 'message': 'Invalid session.'}), 401
+        # kwargs['current_user'] = user # Pass user object to the route
         return await f(*args, **kwargs)
     return decorated_function
 
-async def get_current_user():
-    if 'user_id' not in session:
-        return None
-    try:
-        async with app.pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                await cursor.execute(
-                    "SELECT id, bale_user_id, username FROM users WHERE id = %s",
-                    (session['user_id'],)
-                )
-                user_data = await cursor.fetchone()
-                if user_data:
-                    return User(
-                        user_id=user_data[0],
-                        user_data={
-                            'id': user_data[0],
-                            'bale_user_id': user_data[1],
-                            'username': user_data[2]
-                        }
-                    )
-    except Exception as e:
+# --- Utility Functions ---
+
+async def get_current_user() -> User | None:
+    """Fetches the current user based on session data."""
+    user_db_id = session.get('user_id')
+    if not user_db_id:
         return None
 
+    try:
+        async with app.pool.acquire() as conn:
+            async with conn.cursor(DictCursor) as cursor: # Use DictCursor for easier access
+                await cursor.execute(
+                    "SELECT id, bale_user_id, username FROM users WHERE id = %s",
+                    (user_db_id,)
+                )
+                user_record = await cursor.fetchone()
+                if user_record:
+                    # Create a User object with fetched data
+                    return User(
+                        user_id=user_record['id'],
+                        user_data={
+                            'id': user_record['id'], # Internal ID
+                            'bale_user_id': user_record['bale_user_id'],
+                            'username': user_record['username']
+                            # Add other fields from DB if needed
+                        }
+                    )
+                else:
+                    # User ID in session but not in DB (maybe deleted?)
+                    logger.warning(f"User ID {user_db_id} found in session but not in database.")
+                    session.pop('user_id', None) # Clean up invalid session
+                    return None
+    except aiomysqlError as db_err:
+        logger.error(f"Database error fetching user {user_db_id}: {db_err}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error fetching user {user_db_id}: {e}", exc_info=True)
+        return None
+
+# --- Database Setup ---
 @app.before_serving
 async def setup_db():
-    """Create database pool and tables"""
+    """Initialize database connection pool and ensure tables exist."""
+    logger.info("Setting up database connection pool...")
     try:
-        app.pool = await create_pool(
-            host='annapurna.liara.cloud',
-            user='root',
-            port=32002,
-            password='4zjqmEfeRhCqYYDhvkaODXD3',
-            db='users',
-            autocommit=False,
-            minsize=3,
-            maxsize=10
-        )
-        
+        app.pool = await create_pool(**DB_CONFIG)
+        logger.info(f"Database pool created for {DB_CONFIG['db']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}")
+
+        # Ensure tables are created (safe to run multiple times)
         async with app.pool.acquire() as conn:
             async with conn.cursor() as cursor:
-                # Create tables if not exists
+                logger.info("Checking/Creating database tables...")
                 await cursor.execute('''
                     CREATE TABLE IF NOT EXISTS users (
                         id INT PRIMARY KEY AUTO_INCREMENT,
-                        bale_user_id INT UNIQUE,
-                        username TEXT,
-                        chat_id INT
-                    )
+                        bale_user_id BIGINT UNIQUE NOT NULL, -- Use BIGINT for potentially large IDs
+                        username VARCHAR(255), -- Specify length
+                        chat_id BIGINT, -- Store chat_id if needed, maybe from validation?
+                        registration_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_login_time TIMESTAMP NULL
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; -- Use utf8mb4
                 ''')
+                logger.debug("`users` table checked/created.")
+
                 await cursor.execute('''
                     CREATE TABLE IF NOT EXISTS videos (
                         id INT PRIMARY KEY AUTO_INCREMENT,
-                        user_id INT,
-                        username TEXT,
-                        chat_id INT,
-                        url TEXT,
-                        video_name TEXT,
+                        user_id INT NOT NULL,
+                        -- Consider removing redundant username/chat_id if always derivable from user_id
+                        -- username VARCHAR(255),
+                        -- chat_id BIGINT,
+                        url TEXT NOT NULL, -- URL submitted by user
+                        video_name VARCHAR(512), -- Name provided by user
+                        processing_job_id VARCHAR(36) UNIQUE, -- Link to progress_states key (UUID)
+                        status VARCHAR(50) DEFAULT 'pending', -- e.g., pending, processing, completed, failed
+                        result_url TEXT, -- URL/path to the processed video
                         creation_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users(id)
-                    )
+                        completion_time TIMESTAMP NULL,
+                        error_message TEXT, -- Store errors if processing fails
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE -- Cascade delete if user is removed
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; -- Use utf8mb4
                 ''')
-                await conn.commit()
+                logger.debug("`videos` table checked/created.")
+                await conn.commit() # Commit table creation
+        logger.info("Database setup complete.")
 
-                
+    except aiomysqlError as db_err:
+        logger.critical(f"FATAL: Database connection/setup failed: {db_err}", exc_info=True)
+        # Depending on deployment, might want to exit or retry
+        raise SystemExit(f"Database setup failed: {db_err}")
     except Exception as e:
-        raise
+        logger.critical(f"FATAL: Unexpected error during database setup: {e}", exc_info=True)
+        raise SystemExit(f"Unexpected error during setup: {e}")
 
+@app.after_serving
+async def cleanup_db():
+    """Close the database pool when the app shuts down."""
+    logger.info("Closing database connection pool...")
+    if hasattr(app, 'pool') and app.pool:
+        app.pool.close()
+        await app.pool.wait_closed()
+        logger.info("Database pool closed.")
 
-def url_decode(s):
+# --- [NEW] Asynchronous URL Decoding and Parsing ---
+
+async def url_decode(s: str) -> str:
+    """
+    Asynchronously decodes a URL-encoded string (percent-encoding).
+    Handles '+' as space. Replaces errors.
+    Note: The core logic is CPU-bound. Declared async primarily to fit into
+          an async call chain if required by the caller.
+    """
+    # logger.debug(f"Async url_decode starting for: '{s[:100]}...'")
     bytes_list = []
     i = 0
-    while i < len(s):
-        if s[i] == '%':
-            try:
+    len_s = len(s)
+    while i < len_s:
+        char = s[i]
+        if char == '%':
+            if i + 2 < len_s:
                 hex_code = s[i+1:i+3]
-                byte_val = int(hex_code, 16)
-                bytes_list.append(byte_val)
-                i += 3
-            except (ValueError, IndexError):
+                try:
+                    byte_val = int(hex_code, 16)
+                    bytes_list.append(byte_val)
+                    i += 3
+                except ValueError:
+                    # Invalid hex code, treat '%' literally
+                    logger.warning(f"Invalid hex sequence '%{hex_code}' found during URL decoding.")
+                    bytes_list.append(ord('%'))
+                    i += 1
+            else:
+                # Incomplete escape sequence, treat '%' literally
+                logger.warning("Incomplete '%' escape sequence at end of string during URL decoding.")
                 bytes_list.append(ord('%'))
                 i += 1
-        elif s[i] == '+':
+        elif char == '+':
+            # Decode '+' as space (byte 0x20)
             bytes_list.append(0x20)
             i += 1
         else:
-            bytes_list.append(ord(s[i]))
+            # Append ASCII/UTF-8 byte value of the character
+            # This assumes the original encoding allows direct ord(), which is typical for URL components
+            try:
+                 bytes_list.append(ord(char))
+            except TypeError:
+                 # Should not happen with strings, but as safety
+                 logger.error(f"Cannot get ord() of character: {char!r}")
+                 bytes_list.append(ord('?')) # Replace with placeholder
             i += 1
-    return bytes(bytes_list).decode('utf-8', errors='replace')
+        # # Uncomment to yield control occasionally if decoding very long strings in a tight loop
+        # if i % 1000 == 0: await asyncio.sleep(0)
 
-def parse_qs(query_string):
+    decoded_bytes = bytes(bytes_list)
+    try:
+        # Decode using UTF-8, standard for modern web
+        result = decoded_bytes.decode('utf-8')
+    except UnicodeDecodeError as ude:
+        # Handle cases where bytes are not valid UTF-8
+        logger.warning(f"UnicodeDecodeError during URL decoding: {ude}. Replacing invalid bytes.")
+        result = decoded_bytes.decode('utf-8', errors='replace')
+
+    # logger.debug(f"Async url_decode finished. Result: '{result[:100]}...'")
+    return result
+
+async def parse_qs(query_string):
+    """
+    Asynchronously parses a query string (e.g., from initData) into a dictionary.
+    Handles multiple values for the same key by creating a list.
+    Calls the async version of url_decode.
+    """
+    # logger.debug(f"Async parse_qs starting for: '{query_string[:100]}...'")
     params = {}
     pairs = query_string.split('&')
     for pair in pairs:
         if not pair:
             continue
         parts = pair.split('=', 1)
-        key = url_decode(parts[0])
-        value = url_decode(parts[1]) if len(parts) > 1 else ''
+        key = await url_decode(parts[0])
+        value = await url_decode(parts[1]) if len(parts) > 1 else ''
         if key in params:
             if isinstance(params[key], list):
                 params[key].append(value)
@@ -155,21 +270,63 @@ def parse_qs(query_string):
             params[key] = value
     return params
 
-# Validate initData
-def validate_init_data(init_data):
-    decoded_init_data = url_decode(init_data)
-    parsed_data = parse_qs(decoded_init_data)
-    data_dict = {k: v[0] if isinstance(v, list) else v for k, v in parsed_data.items()}
-    hash_value = data_dict.pop('hash', None)
-    if not hash_value:
-        return False, "Missing hash in initData"
-    sorted_keys = sorted(data_dict.keys())
-    data_check_string = "\n".join([f"{k}={data_dict[k]}" for k in sorted_keys])
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    check_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    if check_hash != hash_value:
-        return False, "Invalid hash, data may be tampered"
-    return True, data_dict
+# --- [NEW] Asynchronous initData Validation ---
+async def validate_init_data(init_data: str, bot_token: str) -> Tuple[bool, Union[str, Dict[str, Any]]]:
+    """
+    Asynchronously validates Telegram/Bale WebApp initData.
+
+    Args:
+        init_data: The raw initData string (URL-encoded query string).
+        bot_token: The secret bot token used for HMAC validation.
+
+    Returns:
+        A tuple: (is_valid, data_or_error_message)
+        If valid: (True, dictionary_of_parsed_and_validated_data (excluding hash))
+        If invalid: (False, error_message_string)
+    """
+    logger.debug("Async validate_init_data starting...")
+    if not init_data:
+        logger.warning("Validation failed: initData string is empty.")
+        return False, "initData string cannot be empty"
+    if not bot_token:
+         logger.error("Validation check cannot proceed: Bot Token is missing.")
+         # Avoid exposing token issues directly to client if possible
+         return False, "Validation configuration error."
+
+    try:
+        # Step 1: URL Decode the initData string (which is expected to be query string format)
+        # This is often implicitly done by frameworks when accessing request data,
+        # but Telegram initData is usually passed raw, so explicit decoding is needed.
+        # No need to decode here IF init_data comes directly from a source
+        # that *already* decoded it (like request.args in some frameworks).
+        # However, Bale's `initData` is typically the raw, encoded string.
+        # decoded_init_data = await url_decode(init_data) # Decode the whole string first if needed
+        # For Telegram/Bale, parse_qs handles the decoding of keys/values internally.
+
+        # Step 2: Parse the query string into key-value pairs
+        # parsed_data = await parse_qs(decoded_init_data) # If decoded above
+        decoded_init_data = await url_decode(init_data)
+        print(decoded_init_data)
+        parsed_data = await parse_qs(decoded_init_data)
+        print(parsed_data)
+        data_dict = {k: v[0] if isinstance(v, list) else v for k, v in parsed_data.items()}
+        hash_value = data_dict.pop('hash', None)
+        print(hash_value)
+        if not hash_value:
+            return False, "Missing hash in initData"
+        sorted_keys = sorted(data_dict.keys())
+        data_check_string = "\n".join([f"{k}={data_dict[k]}" for k in sorted_keys])
+        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        check_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        if check_hash != hash_value:
+            return False, "Invalid hash, data may be tampered"
+        return True, data_dict
+    
+    except Exception as e:
+        # Catch potential errors during decoding/parsing/validation
+        app.logger.error(f"Error during initData validation: {e}", exc_info=True)
+        return False, f"Error during validation process: {e}"
+
 # Core validation functions remain same but async where needed
 # [Keep the url_decode, parse_qs, validate_init_data functions unchanged]
 
@@ -234,7 +391,7 @@ async def login():
     if not init_data:
         return jsonify({'error': 'Missing initData'}), 400
 
-    is_valid, validation_result = validate_init_data(init_data)
+    is_valid, validation_result = await validate_init_data(init_data, BOT_TOKEN)
     if not is_valid:
         return jsonify({'error': validation_result}), 400
 
@@ -284,7 +441,7 @@ async def register():
     if not init_data:
         return jsonify({'error': 'Missing initData'}), 400
 
-    is_valid, validation_result = validate_init_data(init_data)
+    is_valid, validation_result = await validate_init_data(init_data, BOT_TOKEN)
     if not is_valid:
         return jsonify({'error': validation_result}), 400
 
@@ -602,8 +759,10 @@ async def dashboard():
                 ''', (user.user_id,))
                 videos = await cursor.fetchall()
 
-        return await jsonify({"username":user.user_data['username'],
-                               "videos":videos})
+        return jsonify({
+            "username": user.user_data['username'],
+            "videos": videos
+        })
 
     except Exception as e:
         app.logger.error(f"Dashboard error: {e}")
@@ -638,6 +797,7 @@ async def index():
                                 body: JSON.stringify({ initData: initData }),
                                 credentials: 'include'  // Add this line
                             })
+
                             .then(response => {
                                 if (response.ok) {
                                     window.location.href = '/dashboard';
